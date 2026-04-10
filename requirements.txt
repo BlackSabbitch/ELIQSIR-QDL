@@ -1,0 +1,7 @@
+rdkit
+biopython
+pandas
+tqdm
+matplotlib
+torch
+pennylane
