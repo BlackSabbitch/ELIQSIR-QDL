@@ -15,17 +15,24 @@ from collections import Counter
 RDLogger.DisableLog('rdApp.*')
 
 class PDBBindProcessor:
-    def __init__(self, archive_path='pdbbind_v2016.tar.gz', dest_path='data'):
+    def __init__(self, archive_path='pdbbind_v2016.tar.gz', dest_path='data', fast=True):
         self.archive_path = archive_path
         self.dest_path = dest_path
+        if fast:
+            self._parse_single_complex = self._parse_single_complex_fast
+            self._get_seq_from_stream = self._get_seq_from_stream_fast
+        else:
+            self._parse_single_complex = self._parse_single_complex_slow
+            self._get_seq_from_stream = self._get_seq_from_stream_slow
+            # Парсеры инициализируем здесь, но внутри процессов создадим новые (они не всегда pickle-able)
+            self.parser = PDBParser(QUIET=True)
+            self.ppb = PPBuilder()
+
         self.index_map = {
             "core": "v2016/index/INDEX_core_data.2016",
             "refined": "v2016/index/INDEX_refined_data.2016",
             "general": "v2016/index/INDEX_general_PL_data.2016"
         }
-        # Парсеры инициализируем здесь, но внутри процессов создадим новые (они не всегда pickle-able)
-        self.parser = PDBParser(QUIET=True)
-        self.ppb = PPBuilder()
 
     def prepare_metadata(self):
         """Извлекает индексы и readme."""
@@ -70,7 +77,7 @@ class PDBBindProcessor:
                         tar.extract(member, path=self.dest_path)
         print("Распаковка завершена.")
 
-    def _parse_single_complex(self, pdb_id):
+    def _parse_single_complex_slow(self, pdb_id):
         """Рабочая функция для одного процесса."""
         parser = PDBParser(QUIET=True)
         ppb = PPBuilder()
@@ -130,6 +137,50 @@ class PDBBindProcessor:
             df.to_parquet(save_path)
             print(f"Датасет сохранен в {save_path}")
         return df
+
+    def _parse_single_complex_fast(self, pdb_id):
+        """Рабочая функция для одного процесса."""
+        folder = os.path.join(self.dest_path, "v2016", pdb_id)
+        prot_path = os.path.join(folder, f"{pdb_id}_protein.pdb")
+        lig_path = os.path.join(folder, f"{pdb_id}_ligand.sdf")
+        pocket_path = os.path.join(folder, f"{pdb_id}_pocket.pdb")
+
+        if not (os.path.exists(prot_path) and os.path.exists(lig_path) and os.path.exists(pocket_path)):
+            return (pdb_id, None, None, None, "missing_files")
+
+        valid_amino_acids = set("ACDEFGHIKLMNPQRSTVWYX") # X для неизвестных
+        try:
+            # 1. Быстрая обработка белка через RDKit
+            prot_mol = Chem.MolFromPDBFile(prot_path, sanitize=False, proximityBonding=False)
+            if not prot_mol: return (pdb_id, None, None, None, "protein_read_error")
+            seq = Chem.MolToSequence(prot_mol)
+            seq = "".join([res for res in seq if res in valid_amino_acids])
+            
+            # 2. Быстрая обработка кармана через RDKit
+            pock_mol = Chem.MolFromPDBFile(pocket_path, sanitize=False, proximityBonding=False)
+            if not pock_mol: return (pdb_id, None, None, None, "pocket_read_error")
+            pock_seq = Chem.MolToSequence(pock_mol)
+            pock_seq = "".join([res for res in pock_seq if res in valid_amino_acids])
+
+            if not seq or not pock_seq: return (pdb_id, None, None, None, "empty_sequence")
+            if len(seq) > 2000: return (pdb_id, None, None, None, "too_long")
+
+            # 3. Обработка лиганда (SDF через RDKit)
+            mol = Chem.MolFromMolFile(lig_path, sanitize=False)
+            if not mol: return (pdb_id, None, None, None, "ligand_load_error")
+            
+            # Санитаризация
+            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ 
+                                             Chem.SanitizeFlags.SANITIZE_PROPERTIES)
+            Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
+            try:
+                Chem.Kekulize(mol, clearAromaticFlags=True)
+            except: pass
+            smi = Chem.MolToSmiles(mol, isomericSmiles=True)
+            
+            return (pdb_id, seq, pock_seq, smi, None)
+        except Exception as e:
+            return (pdb_id, None, None, None, str(e))
 
     def _build_parallel(self, ids, targets, n_jobs):
         if n_jobs == -1: n_jobs = os.cpu_count()
@@ -197,7 +248,7 @@ class PDBBindProcessor:
         
         return pd.DataFrame(results)
 
-    def _get_seq_from_stream(self, binary_content, pdb_id):
+    def _get_seq_from_stream_slow(self, binary_content, pdb_id):
         try:
             stream = io.StringIO(binary_content.decode('utf-8'))
             struct = self.parser.get_structure(pdb_id, stream)
@@ -205,6 +256,21 @@ class PDBBindProcessor:
             return seq if (seq and len(seq) <= 2000) else None
         except Exception:
             return None
+        
+    def _get_seq_from_stream_fast(self, binary_content, pdb_id): # pdb_id нужен для совместимости интерфейса, но не используется в этой реализации
+        """Быстрая экстракция последовательности через RDKit"""
+        try:
+            # MolFromPDBBlock гораздо быстрее Bio.PDB
+            mol = Chem.MolFromPDBBlock(binary_content.decode('utf-8'))
+            if mol:
+                # Прямая конвертация в аминокислотную последовательность
+                seq = Chem.MolToSequence(mol)
+                valid_amino_acids = set("ACDEFGHIKLMNPQRSTVWYX")  # X для неизвестных
+                seq = "".join([res for res in seq if res in valid_amino_acids])
+                return seq if (seq and len(seq) <= 2000) else None
+        except Exception:
+            pass
+        return None
 
     def _get_smi_from_stream(self, binary_content):
         try:

@@ -60,13 +60,13 @@ class QuantumReUploadingLayer(nn.Module):
         @qml.qnode(dev, interface="torch")
         def circuit(inputs, entangling_weights, embedding_weights):
             # Первичная загрузка
-            qml.AngleEmbedding(inputs, wires=range(n_qubits))
+            qml.AngleEmbedding(inputs, wires=range(n_qubits), rotation="X")
             
             for i in range(self.n_layers):
                 # Обучаемое запутывание
                 qml.StronglyEntanglingLayers(entangling_weights[i], wires=range(n_qubits))
                 # Re-uploading: данные * веса
-                qml.AngleEmbedding(features=inputs * embedding_weights[i], wires=range(n_qubits))
+                qml.AngleEmbedding(features=inputs * embedding_weights[i], wires=range(n_qubits), rotation="X")
             
             # Финальное запутывание
             qml.StronglyEntanglingLayers(entangling_weights[-1], wires=range(n_qubits))
