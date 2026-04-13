@@ -1,33 +1,23 @@
 # extractor.py
 
+from datetime import datetime
+import json
 import os
 import tarfile
-import io
 import pandas as pd
-from Bio.PDB import PDBParser, PPBuilder
-from rdkit import Chem
-from rdkit import RDLogger
 from tqdm import tqdm
 from multiprocessing import Pool
 from collections import Counter
 
-# Отключаем предупреждения RDKit для чистоты вывода
-RDLogger.DisableLog('rdApp.*')
 
-class PDBBindProcessor:
-    def __init__(self, archive_path='pdbbind_v2016.tar.gz', dest_path='data', fast=True):
+class PDBBindOrchestrator:
+    def __init__(self, prot_parser, lig_parser, pock_parser, 
+                 archive_path='pdbbind_v2016.tar.gz', dest_path='data'):
+        self.prot_parser = prot_parser
+        self.lig_parser = lig_parser
+        self.pock_parser = pock_parser
         self.archive_path = archive_path
         self.dest_path = dest_path
-        if fast:
-            self._parse_single_complex = self._parse_single_complex_fast
-            self._get_seq_from_stream = self._get_seq_from_stream_fast
-        else:
-            self._parse_single_complex = self._parse_single_complex_slow
-            self._get_seq_from_stream = self._get_seq_from_stream_slow
-            # Парсеры инициализируем здесь, но внутри процессов создадим новые (они не всегда pickle-able)
-            self.parser = PDBParser(QUIET=True)
-            self.ppb = PPBuilder()
-
         self.index_map = {
             "core": "v2016/index/INDEX_core_data.2016",
             "refined": "v2016/index/INDEX_refined_data.2016",
@@ -35,17 +25,13 @@ class PDBBindProcessor:
         }
 
     def prepare_metadata(self):
-        """Извлекает индексы и readme."""
-        if os.path.exists(os.path.join(self.dest_path, "v2016/index")):
-            return
-        print("Extracting metadata...")
+        if os.path.exists(os.path.join(self.dest_path, "v2016/index")): return
         with tarfile.open(self.archive_path, 'r:gz') as tar:
             for member in tar:
                 if ('index' in member.name.lower() or 'readme' in member.name.lower()) and member.isfile():
                     tar.extract(member, path=self.dest_path)
 
     def get_complex_ids(self, subset="refined"):
-        """Парсит индекс и возвращает словарь с метаданными."""
         self.prepare_metadata()
         index_path = os.path.join(self.dest_path, self.index_map[subset])
         affinity_table = {}
@@ -77,213 +63,161 @@ class PDBBindProcessor:
                         tar.extract(member, path=self.dest_path)
         print("Распаковка завершена.")
 
-    def _parse_single_complex_slow(self, pdb_id):
-        """Рабочая функция для одного процесса."""
-        parser = PDBParser(QUIET=True)
-        ppb = PPBuilder()
-        
+    def _parse_single_complex(self, pdb_id):
+        """Параллельный парсинг с диска."""
         folder = os.path.join(self.dest_path, "v2016", pdb_id)
-        prot_path = os.path.join(folder, f"{pdb_id}_protein.pdb")
-        lig_path = os.path.join(folder, f"{pdb_id}_ligand.sdf")
-        pocket_path = os.path.join(folder, f"{pdb_id}_pocket.pdb")
+        p_path = os.path.join(folder, f"{pdb_id}_protein.pdb")
+        l_path = os.path.join(folder, f"{pdb_id}_ligand.sdf")
+        pk_path = os.path.join(folder, f"{pdb_id}_pocket.pdb")
 
-        if not (os.path.exists(prot_path) and os.path.exists(lig_path) and os.path.exists(pocket_path)):
-            return (pdb_id, None, None, None, "missing_files")
+        if not all(os.path.exists(p) for p in [p_path, l_path, pk_path]):
+            return (pdb_id, None, "missing_files")
 
-        try:
-            # 1. Обработка белка
-            struct = parser.get_structure(pdb_id, prot_path)
-            seq = "".join(str(pp.get_sequence()) for pp in ppb.build_peptides(struct))
-            
-            # 2. Карман (новая часть)
-            pock_struct = parser.get_structure(pdb_id, pocket_path)
-            pock_seq = "".join(str(pp.get_sequence()) for pp in ppb.build_peptides(pock_struct))
+        p_res, p_err = self.prot_parser.parse_file(p_path)
+        if p_err: return (pdb_id, None, f"protein_parse_error: {p_err}")
 
-            if not seq or not pock_seq: return (pdb_id, None, None, None, "empty_sequence")
-            if len(seq) > 2000: return (pdb_id, None, None, None, "too_long")
+        l_res, l_err = self.lig_parser.parse_file(l_path)
+        if l_err: return (pdb_id, None, f"ligand_parse_error: {l_err}")
 
-            # 2. Обработка лиганда
-            mol = Chem.MolFromMolFile(lig_path, sanitize=False)
-            if not mol: return (pdb_id, None, None, None, "rdkit_load_error")
-            
-            # Санитаризация
-            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ 
-                                             Chem.SanitizeFlags.SANITIZE_PROPERTIES)
-            Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-            try:
-                Chem.Kekulize(mol, clearAromaticFlags=True)
-            except: pass
-            smi = Chem.MolToSmiles(mol, isomericSmiles=True)
-            
-            return (pdb_id, seq, pock_seq, smi, None)
-        except Exception as e:
-            return (pdb_id, None, None, None, str(e))
-
-    def build_dataset(self, subset="refined", use_disk=True, n_jobs=-1, save_path=None):
-        targets = self.get_complex_ids(subset)
+        pk_res, pk_err = self.pock_parser.parse_file(pk_path)
+        if pk_err: return (pdb_id, None, f"pocket_parse_error: {pk_err}")
         
-        if use_disk:
-            ids_on_disk = [pid for pid in targets.keys() if 
-                           os.path.exists(os.path.join(self.dest_path, "v2016", pid))]
-            
-            if len(ids_on_disk) < len(targets):
-                print(f"Предупреждение: Найдено только {len(ids_on_disk)} папок на диске.")
-            
-            df = self._build_parallel(ids_on_disk, targets, n_jobs)
-        else:
-            df = self._build_streaming(targets)
-
-        if save_path:
-            df.to_parquet(save_path)
-            print(f"Датасет сохранен в {save_path}")
-        return df
-
-    def _parse_single_complex_fast(self, pdb_id):
-        """Рабочая функция для одного процесса."""
-        folder = os.path.join(self.dest_path, "v2016", pdb_id)
-        prot_path = os.path.join(folder, f"{pdb_id}_protein.pdb")
-        lig_path = os.path.join(folder, f"{pdb_id}_ligand.sdf")
-        pocket_path = os.path.join(folder, f"{pdb_id}_pocket.pdb")
-
-        if not (os.path.exists(prot_path) and os.path.exists(lig_path) and os.path.exists(pocket_path)):
-            return (pdb_id, None, None, None, "missing_files")
-
-        valid_amino_acids = set("ACDEFGHIKLMNPQRSTVWYX") # X для неизвестных
-        try:
-            # 1. Быстрая обработка белка через RDKit
-            prot_mol = Chem.MolFromPDBFile(prot_path, sanitize=False, proximityBonding=False)
-            if not prot_mol: return (pdb_id, None, None, None, "protein_read_error")
-            seq = Chem.MolToSequence(prot_mol)
-            seq = "".join([res for res in seq if res in valid_amino_acids])
-            
-            # 2. Быстрая обработка кармана через RDKit
-            pock_mol = Chem.MolFromPDBFile(pocket_path, sanitize=False, proximityBonding=False)
-            if not pock_mol: return (pdb_id, None, None, None, "pocket_read_error")
-            pock_seq = Chem.MolToSequence(pock_mol)
-            pock_seq = "".join([res for res in pock_seq if res in valid_amino_acids])
-
-            if not seq or not pock_seq: return (pdb_id, None, None, None, "empty_sequence")
-            if len(seq) > 2000: return (pdb_id, None, None, None, "too_long")
-
-            # 3. Обработка лиганда (SDF через RDKit)
-            mol = Chem.MolFromMolFile(lig_path, sanitize=False)
-            if not mol: return (pdb_id, None, None, None, "ligand_load_error")
-            
-            # Санитаризация
-            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ 
-                                             Chem.SanitizeFlags.SANITIZE_PROPERTIES)
-            Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-            try:
-                Chem.Kekulize(mol, clearAromaticFlags=True)
-            except: pass
-            smi = Chem.MolToSmiles(mol, isomericSmiles=True)
-            
-            return (pdb_id, seq, pock_seq, smi, None)
-        except Exception as e:
-            return (pdb_id, None, None, None, str(e))
-
-    def _build_parallel(self, ids, targets, n_jobs):
-        if n_jobs == -1: n_jobs = os.cpu_count()
-        print(f"Запуск параллельного парсинга на {n_jobs} ядрах...")
-        
-        results = []
-        errors = []
-        with Pool(n_jobs) as pool:
-            for res in tqdm(pool.imap(self._parse_single_complex, ids, chunksize=16), total=len(ids)):
-                if res:
-                    pdb_id, seq, pock_seq, smi, err = res
-                    if seq and pock_seq and smi:
-                        results.append({
-                            'pdb_id': pdb_id, 
-                            'pkd': targets[pdb_id]['pkd'],
-                            'res': targets[pdb_id]['res'], 
-                            'smiles': smi, 
-                            'seq': seq,
-                            'pocket_seq': pock_seq
-                        })
-                    else:
-                        errors.append((pdb_id, err))
-        
-        print(f"Успешно: {len(results)}, Ошибок: {len(errors)}")
-        error_types = Counter(err for _, err in errors)
-        print(error_types)
-        return pd.DataFrame(results)
+        return (pdb_id, {'seq': p_res, 'pocket_seq': pk_res, 'smiles': l_res}, None)
 
     def _build_streaming(self, targets):
-        """Режим работы напрямую с архивом (без распаковки)."""
+        """Потоковое чтение из архива напрямую (восстановлено)."""
         results = []
-        pending_ids = {pdb_id: {} for pdb_id in targets}
-        
+        pending = {pid: {} for pid in targets}
         print("Потоковое чтение из архива...")
+        
         with tarfile.open(self.archive_path, 'r:gz') as tar:
             for member in tqdm(tar):
-                if not pending_ids: break
-                if not member.isfile(): continue
-                
+                if not member.isfile() or not pending: continue
                 parts = member.name.split('/')
                 if len(parts) < 3: continue
                 
                 pdb_id = parts[1]
-                if pdb_id not in pending_ids: continue
+                if pdb_id not in pending: continue
                 
-                f_obj = tar.extractfile(member)
-                content = f_obj.read()
+                content = tar.extractfile(member).read()
                 
+                # Используем parse_stream из наших новых парсеров
                 if parts[2].endswith('protein.pdb'):
-                    pending_ids[pdb_id]['seq'] = self._get_seq_from_stream(content, pdb_id)
+                    val, _ = self.prot_parser.parse_stream(content)
+                    pending[pdb_id]['seq'] = val
                 elif parts[2].endswith('pocket.pdb'):
-                    pending_ids[pdb_id]['pocket_seq'] = self._get_seq_from_stream(content, pdb_id)
+                    val, _ = self.pock_parser.parse_stream(content)
+                    pending[pdb_id]['pocket_seq'] = val
                 elif parts[2].endswith('ligand.sdf'):
-                    pending_ids[pdb_id]['smi'] = self._get_smi_from_stream(content)
+                    val, _ = self.lig_parser.parse_stream(content)
+                    pending[pdb_id]['smiles'] = val
 
-                if all(key in pending_ids[pdb_id] for key in ['seq', 'pocket_seq', 'smi']):
-                    s, p, m = pending_ids[pdb_id]['seq'], pending_ids[pdb_id]['pocket_seq'], pending_ids[pdb_id]['smi']
-                    if s and p and m:
-                        results.append({
-                            'pdb_id': pdb_id, 'pkd': targets[pdb_id]['pkd'],
-                            'res': targets[pdb_id]['res'], 'smiles': m,
-                            'seq': s, 'pocket_seq': p
-                        })
-                    del pending_ids[pdb_id]
-        
+                if all(k in pending[pdb_id] for k in ['seq', 'pocket_seq', 'smiles']):
+                    d = pending[pdb_id]
+                    if all([d['seq'], d['pocket_seq'], d['smiles']]):
+                        d.update(
+                            {'pdb_id': pdb_id,
+                             'pkd': targets[pdb_id]['pkd'],
+                             'res': targets[pdb_id]['res']})
+                        results.append(d)
+                    del pending[pdb_id]
         return pd.DataFrame(results)
 
-    def _get_seq_from_stream_slow(self, binary_content, pdb_id):
-        try:
-            stream = io.StringIO(binary_content.decode('utf-8'))
-            struct = self.parser.get_structure(pdb_id, stream)
-            seq = "".join(str(pp.get_sequence()) for pp in self.ppb.build_peptides(struct))
-            return seq if (seq and len(seq) <= 2000) else None
-        except Exception:
-            return None
-        
-    def _get_seq_from_stream_fast(self, binary_content, pdb_id): # pdb_id нужен для совместимости интерфейса, но не используется в этой реализации
-        """Быстрая экстракция последовательности через RDKit"""
-        try:
-            # MolFromPDBBlock гораздо быстрее Bio.PDB
-            mol = Chem.MolFromPDBBlock(binary_content.decode('utf-8'))
-            if mol:
-                # Прямая конвертация в аминокислотную последовательность
-                seq = Chem.MolToSequence(mol)
-                valid_amino_acids = set("ACDEFGHIKLMNPQRSTVWYX")  # X для неизвестных
-                seq = "".join([res for res in seq if res in valid_amino_acids])
-                return seq if (seq and len(seq) <= 2000) else None
-        except Exception:
-            pass
-        return None
+    def _build_parallel(self, ids, targets, n_jobs=-1):
+        results, errors = [], []
+        print(f"Запуск параллельного парсинга на {n_jobs if n_jobs > 0 else os.cpu_count()} ядрах...")
+        with Pool(n_jobs if n_jobs > 0 else os.cpu_count()) as pool:
+            for pid, data, err in tqdm(pool.imap(self._parse_single_complex, ids), total=len(ids)):
+                if data:
+                    data.update(
+                        {'pdb_id': pid,
+                         'pkd': targets[pid]['pkd'],
+                         'res': targets[pid]['res']})
+                    results.append(data)
+                else:
+                    errors.append(err)
 
-    def _get_smi_from_stream(self, binary_content):
-        try:
-            text = binary_content.decode('utf-8')
-            mol = Chem.MolFromMolBlock(text, sanitize=False)
-            if not mol:
-                suppl = Chem.ForwardSDMolSupplier(io.BytesIO(binary_content), sanitize=False)
-                mol = next(suppl)
+        print(f"Успешно: {len(results)}, Ошибок: {len(errors)}")
+        print(Counter(errors))
+        return pd.DataFrame(results)
+
+    def build_dataset(self, subset="refined", use_disk=True, n_jobs=-1,
+                      save_dir="datasets", file_name=None, fmt="parquet", compression="snappy"):
+        """
+        Собирает датасет и сохраняет его с расширенными опциями.
+        save_dir: директория для сохранения
+        file_name: имя файла (без расширения). По умолчанию: pdbbind_{subset}
+        fmt: формат файла ('parquet', 'pickle'/'pkl', 'csv')
+        compression: тип сжатия (snappy, gzip, brotli для parquet; в pickle зависит от библиотеки)
+        """
+        targets = self.get_complex_ids(subset)
+        
+        if not use_disk:
+            df = self._build_streaming(targets)
+        else:
+            ids_on_disk = [pid for pid in targets.keys() if 
+                           os.path.exists(os.path.join(self.dest_path, "v2016", pid))]
             
-            if mol:
-                Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ 
-                                                 Chem.SanitizeFlags.SANITIZE_PROPERTIES)
-                Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
-                return Chem.MolToSmiles(mol, isomericSmiles=True)
-        except Exception:
-            return None
+            df = self._build_parallel(ids_on_disk, targets, n_jobs)
+
+        column_order = ['pdb_id', 'pkd', 'res', 'smiles', 'seq', 'pocket_seq']
+        ordered_cols = [col for col in column_order if col in df.columns]
+        df = df[ordered_cols]
+
+        code = self._make_code(subset)
+        name = file_name if file_name else f"pdbbind_{code}"
+        self.full_path = os.path.join(save_dir, f"{name}.{fmt}")
+        actual_comp = compression if fmt == "parquet" else (None if compression == "snappy" else compression)
+
+        os.makedirs(save_dir, exist_ok=True)
+        self._save_metadata(subset, save_dir, name, fmt, actual_comp, len(df))
+        self._save_dataset(df, fmt, actual_comp)
+
+        return df
+
+    def _make_code(self, subset):
+        prot_parser_name = self.prot_parser.__class__.__name__[0]
+        if prot_parser_name == "GNN":
+            prot_parser_name += f"{str(self.prot_parser.dist_threshold).replace('.', '_')}"
+        lig_parser_name = self.lig_parser.__class__.__name__[0]
+        if lig_parser_name == "GNN":
+            lig_parser_name += f"{str(self.lig_parser.dist_threshold).replace('.', '_')}"
+        pock_parser_name = self.pock_parser.__class__.__name__[0]
+        if pock_parser_name == "GNN":
+            pock_parser_name += f"{str(self.pock_parser.dist_threshold).replace('.', '_')}"
+        return f"{subset}_prot{prot_parser_name}_lig{lig_parser_name}_pock{pock_parser_name}"
+
+
+    def _save_dataset(self, df, fmt, actual_comp):
+        if fmt == "parquet":
+            df.to_parquet(self.full_path, compression=actual_comp)
+        elif fmt in ["pickle", "pkl"]:
+            df.to_pickle(self.full_path, compression=actual_comp)
+        elif fmt == "csv":
+            df.to_csv(self.full_path, index=False, compression=actual_comp)
+            
+        print(f"Датасет сохранен в {self.full_path} (сжатие: {actual_comp})")
+
+    def _save_metadata(self, subset, save_dir, name, fmt, actual_comp, n_complexes):
+        # 2. Собираем метаданные оркестратора и парсеров
+        metadata = {
+            "full_path": self.full_path,
+            "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
+            "subset": subset,
+            "format": fmt,
+            "compression": str(actual_comp),
+            "n_complexes": n_complexes,
+            # Если у твоих парсеров есть атрибуты (например is_ligand), их тоже можно вытащить:
+            "parsers": {
+                "protein": self.prot_parser.__class__.__name__,
+                "ligand": self.lig_parser.__class__.__name__,
+                "pocket": self.pock_parser.__class__.__name__
+            }
+        }
+        
+        # 3. Сохраняем JSON рядом с датасетом
+        self.full_meta_path = os.path.join(save_dir, f"{name}_meta.json")
+        with open(self.full_meta_path, 'w', encoding='utf-8') as f:
+            json.dump(metadata, f, indent=4, ensure_ascii=False)
+
+        print(f"Метаданные сохранены в {self.full_meta_path}")

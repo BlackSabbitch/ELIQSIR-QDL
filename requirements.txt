@@ -2,6 +2,8 @@ rdkit
 biopython
 pandas
 tqdm
+ipywidgets
 matplotlib
 torch
+torch_geometric
 pennylane
