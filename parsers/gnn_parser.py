@@ -1,11 +1,10 @@
 # parsers/gnn_parser.py
 
 import numpy as np
-import io
 from rdkit import Chem
 from Bio.PDB import PDBParser
 from scipy.spatial.distance import cdist
-from .base_parser import BaseParser
+from ._base_parser import BaseParser
 
 class GNNParser(BaseParser):
     def __init__(self, is_ligand=False, dist_threshold=10.0):
@@ -19,23 +18,7 @@ class GNNParser(BaseParser):
                 if not mol: return None, "ligand_load_error"
                 return self._process_ligand(mol)
             else:
-                return self._process_protein(path, is_file=True)
-        except Exception as e:
-            return None, str(e)
-
-    def parse_stream(self, binary_content):
-        try:
-            if self.is_ligand:
-                content = binary_content.decode('utf-8')
-                mol = Chem.MolFromMolBlock(content, sanitize=False)
-                if not mol:
-                    suppl = Chem.ForwardSDMolSupplier(io.BytesIO(binary_content), sanitize=False)
-                    try: mol = next(suppl)
-                    except: mol = None
-                if not mol: return None, "ligand_load_error"
-                return self._process_ligand(mol)
-            else:
-                return self._process_protein(binary_content, is_file=False)
+                return self._process_protein(path)
         except Exception as e:
             return None, str(e)
 
@@ -65,15 +48,10 @@ class GNNParser(BaseParser):
         adj = np.where((dist_mat < self.dist_threshold) & (dist_mat > 0))
         return {'x': coords.tolist(), 'edge_index': np.stack(adj).tolist()}, None
 
-    def _process_protein(self, path_or_bytes, is_file=True):
+    def _process_protein(self, path):
         # ПОПЫТКА 1: Быстрый RDKit
         try:
-            if is_file:
-                mol = Chem.MolFromPDBFile(path_or_bytes, sanitize=False, proximityBonding=False)
-            else:
-                content = path_or_bytes.decode('utf-8') if isinstance(path_or_bytes, bytes) else path_or_bytes
-                mol = Chem.MolFromPDBBlock(content, sanitize=False, proximityBonding=False)
-
+            mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
             if mol and mol.GetNumConformers() > 0:
                 coords = []
                 conf = mol.GetConformer()
@@ -90,11 +68,7 @@ class GNNParser(BaseParser):
         # ПОПЫТКА 2: Надежный Biopython (Архитектурный подход)
         try:
             parser = PDBParser(QUIET=True)
-            if is_file:
-                struct = parser.get_structure("prot", path_or_bytes)
-            else:
-                stream = io.StringIO(path_or_bytes.decode('utf-8') if isinstance(path_or_bytes, bytes) else path_or_bytes)
-                struct = parser.get_structure("prot", stream)
+            struct = parser.get_structure("prot", path)
 
             coords = []
             for model in struct:

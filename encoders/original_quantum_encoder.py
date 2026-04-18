@@ -36,6 +36,6 @@ class QuantumReUploadingLayer(nn.Module):
         self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
 
     def forward(self, x):
-        # Масштабируем вход до [0, pi] для AngleEmbedding
-        x = torch.atan(x) # или tanh * pi
+        # Масштабируем вход до [-pi, pi] для AngleEmbedding
+        x = torch.tanh(x) * torch.pi
         return self.qlayer(x)

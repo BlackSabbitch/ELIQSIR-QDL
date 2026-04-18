@@ -1,9 +1,8 @@
 # parsers/cnn_parser.py
 
 from rdkit import Chem, RDLogger
-import io
 from Bio.PDB import PDBParser, PPBuilder
-from .base_parser import BaseParser
+from ._base_parser import BaseParser
 
 RDLogger.DisableLog('rdApp.*')
 
@@ -20,23 +19,7 @@ class CNNParser(BaseParser):
                 if not mol: return None, "ligand_load_error"
                 return self._process_ligand(mol)
             else:
-                return self._process_protein(path, is_file=True)
-        except Exception as e:
-            return None, str(e)
-
-    def parse_stream(self, binary_content):
-        try:
-            if self.is_ligand:
-                content = binary_content.decode('utf-8')
-                mol = Chem.MolFromMolBlock(content, sanitize=False)
-                if not mol:
-                    suppl = Chem.ForwardSDMolSupplier(io.BytesIO(binary_content), sanitize=False)
-                    try: mol = next(suppl)
-                    except: mol = None 
-                if not mol: return None, "ligand_load_error"
-                return self._process_ligand(mol)
-            else:
-                return self._process_protein(binary_content, is_file=False)
+                return self._process_protein(path)
         except Exception as e:
             return None, str(e)
 
@@ -55,13 +38,9 @@ class CNNParser(BaseParser):
         except Exception as e:
             return None, str(e)
 
-    def _process_protein(self, path_or_bytes, is_file=True):
+    def _process_protein(self, path):
         try:
-            if is_file:
-                mol = Chem.MolFromPDBFile(path_or_bytes, sanitize=False, proximityBonding=False)
-            else:
-                content = path_or_bytes.decode('utf-8')
-                mol = Chem.MolFromPDBBlock(content, sanitize=False, proximityBonding=False)
+            mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
             
             if mol:
                 seq = Chem.MolToSequence(mol)
@@ -74,11 +53,7 @@ class CNNParser(BaseParser):
         try:
             parser = PDBParser(QUIET=True)
             ppb = PPBuilder()
-            if is_file:
-                struct = parser.get_structure("prot", path_or_bytes)
-            else:
-                stream = io.StringIO(path_or_bytes.decode('utf-8') if isinstance(path_or_bytes, bytes) else path_or_bytes)
-                struct = parser.get_structure("prot", stream)
+            struct = parser.get_structure("prot", path)
             
             seq = "".join(str(pp.get_sequence()) for pp in ppb.build_peptides(struct))
 

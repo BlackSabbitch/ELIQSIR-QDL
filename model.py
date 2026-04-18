@@ -2,74 +2,86 @@
 
 import torch
 import torch.nn as nn
-# from torch_geometric.data import Batch
 
 
-class UniversalHybridModel(nn.Module):
-    def __init__(self, protein_encoder, ligand_encoder, pocket_encoder, quantum_encoder):
+class UniversalHybridSlotModel(nn.Module):
+    def __init__(self,
+                 graph_encoder,          
+                 classic_pooler,         # Слот 2A: Пулинг для классики (опционально)
+                 quantum_pooler,         # Слот 2B: Пулинг до кубитов (обязателен для квантов, если размер графа > кубитов)
+                 global_readout,         
+                 quantum_encoder,        
+                 decider_hidden_dims=[64, 32]):
+
         super().__init__()
-        self.protein_encoder = protein_encoder
-        self.ligand_encoder = ligand_encoder
-        self.pocket_encoder = pocket_encoder
+        self.graph_encoder = graph_encoder
+        self.classic_pooler = classic_pooler
+        self.quantum_pooler = quantum_pooler
+        self.readout = global_readout
         self.quantum_encoder = quantum_encoder
-        self.history = {
-            'train_loss': [],
-            'val_rmse': [],
-            'val_pearson': [],
-            'val_ci': [],
-            'best_y_true': None,
-            'best_y_pred': None
-            }
-
-        combined_dim = self.protein_encoder.out_dim + self.ligand_encoder.out_dim + self.pocket_encoder.out_dim
-        # 2. Слой сжатия до размерности кубитов
-        self.pre_quantum = nn.Linear(combined_dim, self.quantum_encoder.n_qubits)
         
-        # 4. Финальный регрессор
-        self.regressor = nn.Sequential(
-            nn.Linear(self.quantum_encoder.n_qubits, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1)
-        )
+        self.history = {'train_loss': [], 'val_rmse': [], 'val_pearson': [], 'val_ci': [], 'best_y_true': None, 'best_y_pred': None}
+        graph_out_dim = self.graph_encoder.out_dim
 
-    def _apply_encoder(self, encoder, data):
-        """
-        Умный роутер для энкодера.
-        Проверяет тип входящих данных и вызывает энкодер правильным образом.
-        """
-        # Если данные пришли как батч графов из PyG
-        if hasattr(data, 'edge_index'):
-            return encoder(x=data.x, edge_index=data.edge_index, batch=data.batch)
-        elif isinstance(data, dict) and 'edge_index' in data:
-            return encoder(x=data['x'], edge_index=data['edge_index'], batch=data['batch'])
-        # Иначе (например, тензор для CNN)
+        # === 1. КЛАССИЧЕСКИЙ РЕШАТЕЛЬ ===
+        self.classic_decider = self._build_mlp(graph_out_dim, decider_hidden_dims)
+
+        # === 2. КВАНТОВЫЙ РЕШАТЕЛЬ ===
+        if self.quantum_encoder is not None:
+            self.to_quantum_adapter = nn.Linear(graph_out_dim, self.quantum_encoder.n_qubits)
+            
+            self.quantum_decider = nn.Sequential(
+                nn.Linear(self.quantum_encoder.n_qubits, 16),
+                nn.Tanh(),
+                nn.Linear(16, 1)
+            )
+            
+            # === 3. ОБУЧАЕМОЕ СЛИЯНИЕ (Твоя идея!) ===
+            # Вместо жесткого '+', мы учим веса: w1 * Base + w2 * Shift + Bias
+            self.final_mixer = nn.Linear(2, 1)
+            # Инициализируем так, чтобы на старте это было точное сложение (1.0 * base + 1.0 * shift + 0.0)
+            nn.init.constant_(self.final_mixer.weight, 1.0)
+            nn.init.constant_(self.final_mixer.bias, 0.0)
+
+    def _build_mlp(self, in_features, hidden_dims):
+        layers = []
+        curr_dim = in_features
+        for h_dim in hidden_dims:
+            layers.append(nn.Linear(curr_dim, h_dim))
+            layers.append(nn.ReLU())
+            curr_dim = h_dim
+        layers.append(nn.Linear(curr_dim, 1)) 
+        return nn.Sequential(*layers)
+
+    def forward(self, data):
+        node_features = self.graph_encoder(data)
+
+        # === КЛАССИЧЕСКАЯ ВЕТКА ===
+        classic_nodes = node_features
+        if self.classic_pooler is not None:
+            classic_nodes = self.classic_pooler(node_features)
+            
+        global_classic = self.readout(classic_nodes)
+        base_affinity = self.classic_decider(global_classic) # Скаляр [Batch, 1]
+
+        if self.quantum_encoder is None:
+            return base_affinity
+
+        # === КВАНТОВАЯ ВЕТКА ===
+        quantum_nodes = node_features
+        if self.quantum_pooler is not None:
+            # Специфичный квантовый пулинг (например, поиск 9 горячих точек)
+            quantum_nodes = self.quantum_pooler(node_features)
+            q_context = self.to_quantum_adapter(quantum_nodes).squeeze(-1) 
         else:
-            return encoder(data)
+            q_context = self.to_quantum_adapter(global_classic)
 
-    def forward(self, prot, lig, pock):
-        # Используем наш роутер для каждого компонента
-        p_feat = self._apply_encoder(self.protein_encoder, prot)
-        l_feat = self._apply_encoder(self.ligand_encoder, lig)
-        pk_feat = self._apply_encoder(self.pocket_encoder, pock)
+        q_features = self.quantum_encoder(q_context)
+        quantum_affinity_shift = self.quantum_decider(q_features) # Скаляр [Batch, 1]
 
-        combined = torch.cat([p_feat, l_feat, pk_feat], dim=1)
+        # === ОБУЧАЕМАЯ ТЕОРИЯ ВОЗМУЩЕНИЙ ===
+        # Конкатенируем два скаляра: [Batch, 2]
+        energies = torch.cat([base_affinity, quantum_affinity_shift], dim=1)
         
-        # Сжимаем и готовим для квантов
-        latent = self.pre_quantum(combined)
-        
-        # Квантовые вычисления
-        q_out = self.quantum_encoder(latent)
-        
-        # Предсказание аффинности
-        return self.regressor(q_out)
-
-
-"""
-HQDeepDTAF = UniversalHybridModel(
-    protein_encoder = FlexCNNBlock(config['prot_vocab'], config['embed_dim'], mode=config['cnn_mode']),
-    ligand_encoder = FlexCNNBlock(config['lig_vocab'], config['embed_dim'], mode=config['cnn_mode']),
-    pocket_encoder = FlexCNNBlock(config['prot_vocab'], config['embed_dim'], mode=config['cnn_mode']),
-    quantum_core = QuantumReUploadingLayer(config['n_qubits'], config['q_layers']),
-    n_qubits = config['n_qubits']
-)
-"""
+        # Миксер сам найдет оптимальные веса (например, 0.95 и 1.05)
+        return self.final_mixer(energies)

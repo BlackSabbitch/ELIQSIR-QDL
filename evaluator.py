@@ -42,7 +42,11 @@ class EValuator:
         preds, targets = [], []
         with torch.no_grad():
             for prot, lig, pock, y in loader:
-                y_hat = self.model(prot.to(self.device), lig.to(self.device), pock.to(self.device))
+                prot = prot.to(self.device) if hasattr(prot, 'to') else {k: v.to(self.device) for k, v in prot.items()}
+                lig = lig.to(self.device) if hasattr(lig, 'to') else {k: v.to(self.device) for k, v in lig.items()}
+                pock = pock.to(self.device) if hasattr(pock, 'to') else {k: v.to(self.device) for k, v in pock.items()}
+                # ВАЖНО: Передаем КОРТЕЖ из трех элементов (двойные скобки)
+                y_hat = self.model((prot, lig, pock))
                 preds.extend(y_hat.cpu().view(-1).tolist())
                 targets.extend(y.tolist())
         

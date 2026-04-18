@@ -10,11 +10,6 @@ class BaseParser(ABC):
         pass
 
     @abstractmethod
-    def parse_stream(self, binary_content):
-        """Парсинг бинарного контента из архива. Возвращает (data, error_string)"""
-        pass
-
-    @abstractmethod
     def _process_ligand(self, mol):
         """Обработка объекта молекулы лиганда"""
         pass

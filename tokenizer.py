@@ -1,6 +1,7 @@
 # tokenizer.py
 
 import pandas as pd
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch_geometric.data import Data
@@ -43,14 +44,24 @@ class UniversalPDBBindDataset(Dataset):
             # Fallback на случай битых данных
             return Data(x=torch.zeros((1, 3)), edge_index=torch.empty((2, 0), dtype=torch.long))
             
-        x = torch.tensor(graph_dict['x'], dtype=torch.float32)
-        edge_index = torch.tensor(graph_dict['edge_index'], dtype=torch.long)
-        
-        # PyG требует форму [2, num_edges]. Если пришло [num_edges, 2] - транспонируем
-        if edge_index.numel() > 0 and edge_index.shape[1] == 2 and edge_index.shape[0] != 2:
-            edge_index = edge_index.t().contiguous()
-            
-        return Data(x=x, edge_index=edge_index)
+        tensor_kwargs = {}
+        for key, value in graph_dict.items():
+            if key == 'edge_index':
+                ei = torch.tensor(value, dtype=torch.long)
+                # Исправляем размерность для PyG [2, num_edges]
+                if ei.numel() > 0 and ei.shape[1] == 2 and ei.shape[0] != 2:
+                    ei = ei.t().contiguous()
+                tensor_kwargs[key] = ei
+            elif isinstance(value, (list, np.ndarray)):
+                # Если это целочисленные данные (например, атомные номера) -> long
+                # Если с плавающей точкой (координаты, заряды) -> float32
+                arr = np.array(value)
+                dtype = torch.long if arr.dtype.kind in 'iu' else torch.float32
+                tensor_kwargs[key] = torch.tensor(arr, dtype=dtype)
+            else:
+                tensor_kwargs[key] = value
+                
+        return Data(**tensor_kwargs)
 
     def _process_item(self, item, vocab=None, max_len=None):
         """Умный роутер: определяет тип данных и вызывает нужный энкодер"""

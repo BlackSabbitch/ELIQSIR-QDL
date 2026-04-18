@@ -25,7 +25,9 @@ class PDBBindOrchestrator:
         }
 
     def prepare_metadata(self):
-        if os.path.exists(os.path.join(self.dest_path, "v2016/index")): return
+        if os.path.exists(os.path.join(self.dest_path, "v2016/index")):
+            return
+
         with tarfile.open(self.archive_path, 'r:gz') as tar:
             for member in tar:
                 if ('index' in member.name.lower() or 'readme' in member.name.lower()) and member.isfile():
@@ -84,46 +86,7 @@ class PDBBindOrchestrator:
         
         return (pdb_id, {'seq': p_res, 'pocket_seq': pk_res, 'smiles': l_res}, None)
 
-    def _build_streaming(self, targets):
-        """Потоковое чтение из архива напрямую (восстановлено)."""
-        results = []
-        pending = {pid: {} for pid in targets}
-        print("Потоковое чтение из архива...")
-        
-        with tarfile.open(self.archive_path, 'r:gz') as tar:
-            for member in tqdm(tar):
-                if not member.isfile() or not pending: continue
-                parts = member.name.split('/')
-                if len(parts) < 3: continue
-                
-                pdb_id = parts[1]
-                if pdb_id not in pending: continue
-                
-                content = tar.extractfile(member).read()
-                
-                # Используем parse_stream из наших новых парсеров
-                if parts[2].endswith('protein.pdb'):
-                    val, _ = self.prot_parser.parse_stream(content)
-                    pending[pdb_id]['seq'] = val
-                elif parts[2].endswith('pocket.pdb'):
-                    val, _ = self.pock_parser.parse_stream(content)
-                    pending[pdb_id]['pocket_seq'] = val
-                elif parts[2].endswith('ligand.sdf'):
-                    val, _ = self.lig_parser.parse_stream(content)
-                    pending[pdb_id]['smiles'] = val
-
-                if all(k in pending[pdb_id] for k in ['seq', 'pocket_seq', 'smiles']):
-                    d = pending[pdb_id]
-                    if all([d['seq'], d['pocket_seq'], d['smiles']]):
-                        d.update(
-                            {'pdb_id': pdb_id,
-                             'pkd': targets[pdb_id]['pkd'],
-                             'res': targets[pdb_id]['res']})
-                        results.append(d)
-                    del pending[pdb_id]
-        return pd.DataFrame(results)
-
-    def _build_parallel(self, ids, targets, n_jobs=-1):
+    def _build(self, ids, targets, n_jobs=-1):
         results, errors = [], []
         print(f"Запуск параллельного парсинга на {n_jobs if n_jobs > 0 else os.cpu_count()} ядрах...")
         with Pool(n_jobs if n_jobs > 0 else os.cpu_count()) as pool:
@@ -152,19 +115,16 @@ class PDBBindOrchestrator:
         """
         targets = self.get_complex_ids(subset)
         
-        if not use_disk:
-            df = self._build_streaming(targets)
-        else:
-            ids_on_disk = [pid for pid in targets.keys() if 
-                           os.path.exists(os.path.join(self.dest_path, "v2016", pid))]
+        ids_on_disk = [pid for pid in targets.keys() if 
+                       os.path.exists(os.path.join(self.dest_path, "v2016", pid))]
             
-            df = self._build_parallel(ids_on_disk, targets, n_jobs)
+        df = self._build(ids_on_disk, targets, n_jobs)
 
         column_order = ['pdb_id', 'pkd', 'res', 'smiles', 'seq', 'pocket_seq']
         ordered_cols = [col for col in column_order if col in df.columns]
         df = df[ordered_cols]
 
-        code = self._make_code(subset)
+        code = self._make_alias(subset)
         name = file_name if file_name else f"pdbbind_{code}"
         self.full_path = os.path.join(save_dir, f"{name}.{fmt}")
         actual_comp = compression if fmt == "parquet" else (None if compression == "snappy" else compression)
@@ -175,7 +135,7 @@ class PDBBindOrchestrator:
 
         return df
 
-    def _make_code(self, subset):
+    def _make_alias(self, subset):
         prot_parser_name = self.prot_parser.__class__.__name__[0]
         if prot_parser_name == "GNN":
             prot_parser_name += f"{str(self.prot_parser.dist_threshold).replace('.', '_')}"
