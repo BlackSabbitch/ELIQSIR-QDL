@@ -252,7 +252,6 @@ pip install rdkit biopython pandas tqdm ipywidgets matplotlib torch torch_geomet
 2. Add a minimal example notebook or script showing `TrioPipelineFactory` and `UniversalPDBBindDataset` usage.
 3. Add a `duo_encoder` or other multi-slot alternatives as a documented extension.
 4. Add Docker or Makefile support for reproducible setup.
+5. Add a temperature as a parameter for the final mixer.
 
 ---
-
-If you want, I can also add a concrete training example and a detailed parameter reference for `FlexGNNBlock` and `QuantumReUploadingLayer`.
