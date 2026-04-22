@@ -75,43 +75,35 @@ If no quantum branch is present, the model returns the classical affinity direct
                             [protein, ligand, pocket]
                                     │
                                     ▼
-                        ┌──────────────────────────┐
-                        │      graph_encoder       │
-                        │ (trio / duo / EGNN, ...) │
-                        └──────────────────────────┘
-                                    │
-                                    ▼
-                            ┌──────────────────┐
-                            │ classical branch │
-                     ┌──────│  global_readout  │──────┐
-                     |      │  classic_decider │      |
-                     |      └──────────────────┘      |
-                     │                                |
-                     │                                |
-                     │                                |
-                     |                                │
-                     ▼                                ▼
-            ┌──────────────────┐        ┌───────────────────────────┐
-            │  quantum_pooler  │        | classic_pooler (optional) |
-            ┌──────────────────┐        ┌───────────────────────────┐
-            │ quantum branch   │        │  Multi-Layer Perceptron   │
-            │  adapter Linear  │        └───────────────────────────┘
-            │  quantum_encoder │                      │
-            │  quantum_decider │                      │
-            └──────────────────┘                      │
-                     │                                │
-                     │                                │
-         quantum_shift (optional)                base_affinity
-                     │                                │
-                     ▼                                ▼
-                  ┌──────────────────────────────────────┐
-                  │             learnable mixer          │
-                  │            concat([base, q])         │
-                  │              Linear(2->1)            │
-                  └──────────────────────────────────────┘
-                                     │
-                                     ▼
-                         final affinity prediction
+                            ┌──────────────────────────┐
+                            │      graph_encoder       │
+                    ┌───────│ (trio / duo / EGNN, ...) │───────┐
+                    |       └──────────────────────────┘       |
+                    |                                          |
+                    ▼                                          ▼
+        ┌───────────────────────┐        ┌────────────────────────────────────────────────────────────┐
+        │      graph_pooler     │        |               graph_pooler (optional if MLP)               |
+        | graph_out_dim -> q_in |        |  graph_out_dim -> reducer_in (graph_out_dim, mlp_in, q_in) |
+        ┌───────────────────────┐        ┌────────────────────────────────────────────────────────────┐
+        │    quantum_encoder    │        │              Dimension reducer (quantum / MLP)             │
+        |     q_in -> q_out     |        |                   Linear(reducer_in -> 1)                  |
+        └───────────────────────┘        └────────────────────────────────────────────────────────────┘
+        │    quantum_decider    │                     │                         |
+        |       q_out -> 1      |                     |                         |
+        └───────────────────────┘                     │                         |
+                     │                                │                         |
+                     │                                │                         |
+         quantum_shift (optional)                base_affinity      OR     base_affinity
+                     │                                │                         |
+                     ▼                                ▼                         |
+                  ┌──────────────────────────────────────┐                      |
+                  │             learnable mixer          │                      |
+                  │            concat([base, q])         │                      |
+                  │              Linear(2->1)            │                      |
+                  └──────────────────────────────────────┘                      |
+                                     │                                          |
+                                     ▼                                          ▼
+                         final affinity prediction                  final affinity prediction
 ```
 
 This diagram shows the branching behavior clearly:
