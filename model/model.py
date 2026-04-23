@@ -57,11 +57,6 @@ class UniversalHybridSlotModel(nn.Module):
         self.quantum_head = quantum_head
         self.final_mixer = final_mixer
 
-        self.history = {
-            'train_loss': [], 'val_rmse': [], 'val_pearson': [], 
-            'val_ci': [], 'best_y_true': None, 'best_y_pred': None
-            }
-
         # Auto-initialization and checks
         if self.quantum_encoder is not None:
             self._init_submodules_for_quantum_branch()

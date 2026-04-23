@@ -159,7 +159,7 @@ class HybridTrainer:
                 val_loss += self.criterion(preds, targets).item()
         return val_loss / len(loader)
 
-    def train(self, train_loader, val_loader, exp_dir) -> Tuple[dict, int, float]:
+    def train(self, train_loader, val_loader, exp_dir) -> Tuple[int, float]:
         """
         Run the complete training loop.
 
@@ -194,6 +194,8 @@ class HybridTrainer:
                 json.dump(history, f, indent=4)
             torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
 
+        self.history = history
+
             # Печатаем итоги эпохи (в статье используются именно эти метрики [cite: 515, 516, 521])
             logger.info(f"   ∟ Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}")
             logger.info("-" * 60)
@@ -208,8 +210,8 @@ class HybridTrainer:
 
         return history, best_epoch, best_val_r
 
-    def test(self, test_loader, exp_dir, show_plots=True, save_plots=True):
-        self.evaluator.plot_history(exp_dir, show=show_plots, save=save_plots)
+    def test(self, test_loader, exp_dir, best_epoch, history, show_plots=False, save_plots=True):
+        self.evaluator.plot_history(exp_dir, history, show=show_plots, save=save_plots)
 
         logger.info("\n================ FINAL TEST (CORE SET) ================")
         # Подгружаем веса лучшей эпохи (в идеале нужно написать логику загрузки лучшего .pt,

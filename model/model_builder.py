@@ -5,6 +5,7 @@ import torch.nn as nn
 from encoders.trio_encoder import build_trio_encoder
 from encoders.original_quantum_encoder import QuantumReUploadingLayer
 from typing import Optional, Tuple, Union
+from model.model import UniversalHybridSlotModel
 from logger import *
 
 

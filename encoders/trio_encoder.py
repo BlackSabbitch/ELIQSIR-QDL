@@ -113,6 +113,9 @@ def build_trio_encoder(config_dict: Dict[str, Any]) -> TrioEncoder:
     encoders = []
     
     # Config for each of 3 slots
+    slot_names = ['protein', 'ligand', 'pocket']
+    slot_in_keys = ['protein_in_channels', 'ligand_in_channels', 'pocket_in_channels']
+
     for i, char in enumerate(config_str):
         if char == 'N':
             # Null-block preserves hidden_dim so total out_dim is predictable
@@ -124,8 +127,12 @@ def build_trio_encoder(config_dict: Dict[str, Any]) -> TrioEncoder:
             len_vocab = len(vocab)
             params = trio_cfg['cnn_params']
             enc = FlexCNNBlock(vocab_size=len_vocab, **params)
+
         elif char == 'G':
-            params = trio_cfg['gnn_params']
+            params = dict(trio_cfg['gnn_params'])
+            override_key = slot_in_keys[i]
+            if override_key in params:
+                params['in_channels'] = params[override_key]
             enc = FlexGNNBlock(**params)
         else:
             enc.out_dim = trio_cfg['hidden_dim']

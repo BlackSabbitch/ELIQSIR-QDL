@@ -100,14 +100,20 @@ class Evaluator:
         self.model.eval()
         preds, targets = [], []
         with torch.no_grad():
-            for prot, lig, pock, y in loader:
-                prot = prot.to(self.device) if hasattr(prot, 'to') else {k: v.to(self.device) for k, v in prot.items()}
-                lig = lig.to(self.device) if hasattr(lig, 'to') else {k: v.to(self.device) for k, v in lig.items()}
-                pock = pock.to(self.device) if hasattr(pock, 'to') else {k: v.to(self.device) for k, v in pock.items()}
-                # IMPORTANT: Pass TUPLE of three elements (double parentheses)
-                y_hat = self.model((prot, lig, pock))
+            for batch in loader:
+                *inputs, targets = batch
+                inputs = [inp.to(self.device) if hasattr(inp, 'to') else {k: v.to(self.device) for k, v in inp.items()} for inp in inputs]
+                y_hat = self.model(tuple(inputs))
                 preds.extend(y_hat.cpu().view(-1).tolist())
-                targets.extend(y.tolist())
+                targets.extend(targets.tolist())
+            # for prot, lig, pock, y in loader:
+            #     prot = prot.to(self.device) if hasattr(prot, 'to') else {k: v.to(self.device) for k, v in prot.items()}
+            #     lig = lig.to(self.device) if hasattr(lig, 'to') else {k: v.to(self.device) for k, v in lig.items()}
+            #     pock = pock.to(self.device) if hasattr(pock, 'to') else {k: v.to(self.device) for k, v in pock.items()}
+            #     # IMPORTANT: Pass TUPLE of three elements (double parentheses)
+            #     y_hat = self.model(tuple(inputs))
+            #     preds.extend(y_hat.cpu().view(-1).tolist())
+            #     targets.extend(y.tolist())
         
         preds = np.array(preds)
         targets = np.array(targets)
@@ -118,7 +124,7 @@ class Evaluator:
 
         return rmse, r_val, ci_val, preds, targets
 
-    def plot_history(self, exp_dir: str, show: bool = True, save: bool = True) -> None:
+    def plot_history(self, exp_dir: str, history: dict, show: bool = True, save: bool = True) -> None:
         """
         Plot training history and save to file.
 
@@ -133,13 +139,13 @@ class Evaluator:
         Example:
             >>> evaluator.plot_history('experiments/exp_001', show=False, save=True)
         """
-        epochs = range(1, len(self.model.history['train_loss']) + 1)
+        epochs = range(1, len(history['train_loss']) + 1)
         
         plt.figure(figsize=(15, 15))
 
         # 1. Loss (Training)
         plt.subplot(3, 2, 1)
-        plt.plot(epochs, self.model.history['train_loss'], 'b-', label='Train Loss')
+        plt.plot(epochs, history['train_loss'], 'b-', label='Train Loss')
         plt.title('Learning Curve (Loss)')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
@@ -147,14 +153,14 @@ class Evaluator:
 
         # 2. RMSE
         plt.subplot(3, 2, 2)
-        plt.plot(epochs, self.model.history['val_rmse'], 'r-', label='Val RMSE')
+        plt.plot(epochs, history['val_rmse'], 'r-', label='Val RMSE')
         plt.title('Validation RMSE')
         plt.xlabel('Epochs')
         plt.grid(True)
 
         # 3. Pearson R
         plt.subplot(3, 2, 3)
-        plt.plot(epochs, self.model.history['val_pearson'], 'g-', label='Pearson R')
+        plt.plot(epochs, history['val_pearson'], 'g-', label='Pearson R')
         plt.title('Correlation (Pearson R)')
         plt.xlabel('Epochs')
         plt.ylabel('R')
@@ -162,21 +168,21 @@ class Evaluator:
 
         # 4. CI
         plt.subplot(3, 2, 4)
-        plt.plot(epochs, self.model.history['val_ci'], 'm-', label='Concordance Index')
+        plt.plot(epochs, history['val_ci'], 'm-', label='Concordance Index')
         plt.title('Ranking Accuracy (CI)')
         plt.xlabel('Epochs')
         plt.ylabel('CI')
         plt.grid(True)
 
-        y_true_np = np.array(self.model.history['best_y_true'])
-        y_pred_np = np.array(self.model.history['best_y_pred'])
+        y_true_np = np.array(history['best_y_true'])
+        y_pred_np = np.array(history['best_y_pred'])
 
         plt.subplot(3, 2, 5)
         plt.scatter(y_true_np, y_pred_np, alpha=0.5, color='teal')
         # Ideal prediction line (diagonal)
         lims = [min(min(y_true_np), min(y_pred_np)), max(max(y_true_np), max(y_pred_np))]
         plt.plot(lims, lims, 'r--', alpha=0.75, zorder=0)
-        plt.title(f'Actual vs Predicted (Epoch {len(self.model.history["val_pearson"])})')
+        plt.title(f'Actual vs Predicted (Epoch {len(history["val_pearson"])})')
         plt.xlabel('Actual pKd')
         plt.ylabel('Predicted pKd')
         plt.grid(True)

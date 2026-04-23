@@ -59,14 +59,16 @@ def get_loss_function(config_training: Dict[str, Any]) -> nn.Module:
     Returns:
         Instantiated loss module.
     """
-    loss_name = config_training['loss_fn']
+    loss_name = config_training['loss_fn']['selected']
+    loss_parameters = config_training['loss_fn']['available'].get(loss_name, {})
 
     if loss_name in CUSTOM_LOSSES:
         loss_class = CUSTOM_LOSSES[loss_name]
         if loss_name == "RankingMSELoss":
-            return loss_class(alpha=config_training.get('ranking_alpha', 2.0))
+            return loss_class(**loss_parameters)
+        logger.info(f"[loss_functions] Using custom loss {loss_name}")
         return loss_class()
     if hasattr(nn, loss_name):
         logger.info(f"[loss_functions] Using built-in PyTorch loss {loss_name}")
-        return getattr(nn, loss_name)()
+        return getattr(nn, loss_name)(**loss_parameters)
     raise ValueError(f"Loss function '{loss_name}' not found in PyTorch or custom registry.")
