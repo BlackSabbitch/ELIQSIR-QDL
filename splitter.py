@@ -4,22 +4,43 @@ import numpy as np
 import random
 import hashlib
 from collections import defaultdict
+import pandas as pd
 
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
+from typing import Tuple, Optional, List
+from logger import logger
 
 
 class PDBBindSplitter:
     """
-    Набор стратегий разбиения PDBBind refined dataset.
-    Все методы возвращают (train_df, val_df)
+    Collection of splitting strategies for PDBBind refined dataset.
+
+    Provides various methods for splitting molecular datasets into train/validation sets,
+    including random, scaffold-based, and scaffold-balanced splits. All methods
+    return (train_df, val_df) tuples.
+
+    Example:
+        >>> train_df, val_df = PDBBindSplitter.random_split(df, val_frac=0.15, seed=42)
+        >>> print(f"Train: {len(train_df)}, Val: {len(val_df)}")
     """
 
     # ======================
     # RANDOM SPLIT
     # ======================
     @staticmethod
-    def random_split(df, val_frac=0.1, seed=42):
+    def random_split(df: pd.DataFrame, val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Perform random split of the dataset.
+
+        Args:
+            df: Input DataFrame to split.
+            val_frac: Fraction of data for validation (0.0 to 1.0).
+            seed: Random seed for reproducibility.
+
+        Returns:
+            Tuple of (train_df, val_df).
+        """
         np.random.seed(seed)
         indices = np.random.permutation(len(df))
 
@@ -33,9 +54,15 @@ class PDBBindSplitter:
     # SCAFFOLD SPLIT
     # ======================
     @staticmethod
-    def _get_scaffold(smiles):
+    def _get_scaffold(smiles: str) -> Optional[str]:
         """
-        Возвращает Murcko scaffold или None, если не удалось построить.
+        Get Murcko scaffold from SMILES string.
+
+        Args:
+            smiles: SMILES string of the molecule.
+
+        Returns:
+            Scaffold SMILES string or None if failed to generate.
         """
         if not isinstance(smiles, str) or len(smiles) == 0:
             return None
@@ -56,7 +83,22 @@ class PDBBindSplitter:
             return None
 
     @staticmethod
-    def scaffold_split_strict(df, val_frac=0.1, seed=42):
+    def scaffold_split_strict(df: pd.DataFrame, val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Perform strict scaffold-based split.
+
+        Ensures that molecules with the same scaffold are never split between
+        train and validation sets. Assigns entire scaffold groups to either
+        train or validation.
+
+        Args:
+            df: DataFrame with 'smiles' column.
+            val_frac: Target fraction for validation.
+            seed: Random seed.
+
+        Returns:
+            Tuple of (train_df, val_df).
+        """
         random.seed(seed)
 
         scaffold_to_indices = defaultdict(list)
@@ -69,7 +111,7 @@ class PDBBindSplitter:
 
             scaffold_to_indices[scaf].append(i)
 
-        # сортировка по размеру (большие сначала)
+        # Sort by size (largest first)
         scaffolds = sorted(scaffold_to_indices.values(), key=len, reverse=True)
 
         train_idx, val_idx = [], []
@@ -84,7 +126,21 @@ class PDBBindSplitter:
         return df.iloc[train_idx], df.iloc[val_idx]
 
     @staticmethod
-    def scaffold_split_balanced(df, val_frac=0.1, seed=42):
+    def scaffold_split_balanced(df: pd.DataFrame, val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Perform balanced scaffold-based split.
+
+        Attempts to balance scaffold distribution while maintaining the target
+        validation fraction. May split some scaffold groups if necessary.
+
+        Args:
+            df: DataFrame with 'smiles' column.
+            val_frac: Target fraction for validation.
+            seed: Random seed.
+
+        Returns:
+            Tuple of (train_df, val_df).
+        """
         random.seed(seed)
 
         scaffold_to_indices = defaultdict(list)
@@ -111,7 +167,21 @@ class PDBBindSplitter:
         return df.iloc[train_idx], df.iloc[val_idx]
 
     @staticmethod
-    def cold_protein_split(df, val_frac=0.1, seed=42):
+    def cold_protein_split(df: pd.DataFrame, val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Perform cold protein split.
+
+        Ensures that proteins not seen in training appear in validation.
+        Groups complexes by protein sequence and assigns entire groups.
+
+        Args:
+            df: DataFrame with 'seq' column containing protein sequences.
+            val_frac: Target fraction for validation.
+            seed: Random seed.
+
+        Returns:
+            Tuple of (train_df, val_df).
+        """
         random.seed(seed)
 
         protein_to_indices = defaultdict(list)
@@ -137,8 +207,23 @@ class PDBBindSplitter:
     # UNIFIED INTERFACE
     # ======================
     @staticmethod
-    def split(df, strategy="random", val_frac=0.1, seed=42):
-        print(f"Split strategy: {strategy}")
+    def split(df: pd.DataFrame, strategy: str = "random", val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Unified interface for all splitting strategies.
+
+        Args:
+            df: DataFrame to split.
+            strategy: Splitting strategy ('random', 'scaffold', 'scaffold_balanced', 'cold_protein').
+            val_frac: Validation fraction.
+            seed: Random seed.
+
+        Returns:
+            Tuple of (train_df, val_df).
+
+        Raises:
+            ValueError: If strategy is not supported.
+        """
+        logger.info(f"[SPLIT] Strategy: {strategy}")
 
         if strategy == "random":
             return PDBBindSplitter.random_split(df, val_frac, seed)

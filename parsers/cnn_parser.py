@@ -1,63 +1,94 @@
 # parsers/cnn_parser.py
 
+from typing import Any, Optional, Tuple
 from rdkit import Chem, RDLogger
 from Bio.PDB import PDBParser, PPBuilder
 from ._base_parser import BaseParser
+from logger import logger
 
 RDLogger.DisableLog('rdApp.*')
 
 
 class CNNParser(BaseParser):
-    def __init__(self, is_ligand=False):
+    """
+    Parser for extracting protein sequences or ligand SMILES suitable for CNN input.
+
+    Uses RDKit and Biopython fallback logic to extract reliable sequence information.
+    """
+
+    def __init__(self, is_ligand: bool = False) -> None:
+        """
+        Initialize CNN parser.
+
+        Args:
+            is_ligand: Whether to parse ligand files instead of protein PDB files.
+        """
         self.is_ligand = is_ligand
         self.valid_aa = set("ACDEFGHIKLMNPQRSTVWYX")
+        logger.info(f"[CNNParser] Initialized is_ligand={is_ligand}")
 
-    def parse_file(self, path):
+    def parse_file(self, path: str) -> Tuple[Optional[Any], Optional[str]]:
+        """
+        Parse a file into either a protein sequence or ligand SMILES.
+
+        Args:
+            path: Path to the input file.
+
+        Returns:
+            Tuple of parsed object and error message. Error message is None on success.
+        """
         try:
             if self.is_ligand:
                 mol = Chem.MolFromMolFile(path, sanitize=False)
-                if not mol: return None, "ligand_load_error"
+                if not mol:
+                    return None, "ligand_load_error"
                 return self._process_ligand(mol)
-            else:
-                return self._process_protein(path)
+            return self._process_protein(path)
         except Exception as e:
+            logger.warning(f"[CNNParser] parse_file failed: {e}")
             return None, str(e)
 
-    def _process_ligand(self, mol):
+    def _process_ligand(self, mol: Chem.Mol) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Convert ligand molecule into canonical SMILES.
+        """
         try:
-            Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ 
-                                             Chem.SanitizeFlags.SANITIZE_PROPERTIES)
-            # Возвращаем стереохимию и кекулизацию!
+            Chem.SanitizeMol(
+                mol,
+                sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES,
+            )
             Chem.AssignStereochemistry(mol, cleanIt=True, force=True)
             try:
                 Chem.Kekulize(mol, clearAromaticFlags=True)
-            except: 
+            except Exception:
                 pass
-                
             return Chem.MolToSmiles(mol, isomericSmiles=True), None
         except Exception as e:
+            logger.warning(f"[CNNParser] ligand processing failed: {e}")
             return None, str(e)
 
-    def _process_protein(self, path):
+    def _process_protein(self, path: str) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Extract an amino acid sequence from a protein PDB file.
+        """
         try:
             mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
-            
             if mol:
                 seq = Chem.MolToSequence(mol)
                 res_seq = "".join([res for res in seq if res in self.valid_aa])
-                if res_seq: return res_seq, None
-        except:
+                if res_seq:
+                    return res_seq, None
+        except Exception:
             pass
 
-        # Если быстрый метод не сработал, пробуем медленный
         try:
             parser = PDBParser(QUIET=True)
             ppb = PPBuilder()
             struct = parser.get_structure("prot", path)
-            
             seq = "".join(str(pp.get_sequence()) for pp in ppb.build_peptides(struct))
-
-            if seq: return seq, None
-            else: return None, "empty_sequence_in_both_parsers"
+            if seq:
+                return seq, None
+            return None, "empty_sequence_in_both_parsers"
         except Exception as e:
-            return None, f"biopython_fallback_error: {str(e)}"
+            logger.warning(f"[CNNParser] protein fallback failed: {e}")
+            return None, f"biopython_fallback_error: {e}"

@@ -1,88 +1,123 @@
-# parsers/gnn_parser.py
-
 import numpy as np
+from typing import Any, Dict, List, Optional, Tuple
 from rdkit import Chem
 from Bio.PDB import PDBParser
 from scipy.spatial.distance import cdist
 from ._base_parser import BaseParser
+from logger import logger
+
 
 class GNNParser(BaseParser):
-    def __init__(self, is_ligand=False, dist_threshold=10.0):
+    """
+    Parser for protein and ligand graph representations suitable for GNN input.
+    """
+
+    def __init__(self, is_ligand: bool = False, dist_threshold: float = 10.0, ca_only: bool = True) -> None:
+        super().__init__()
         self.is_ligand = is_ligand
         self.dist_threshold = dist_threshold
+        self.ca_only = ca_only
+        logger.info(f"[GNNParser] Initialized is_ligand={is_ligand}, dist_threshold={dist_threshold}, ca_only={ca_only}")
 
-    def parse_file(self, path):
+    def parse_file(self, path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Parse a PDB or MOL file into graph data for GNN embeddings.
+
+        Args:
+            path: File path to the protein or ligand source.
+
+        Returns:
+            A tuple containing graph data and an optional error message.
+        """
         try:
             if self.is_ligand:
                 mol = Chem.MolFromMolFile(path, sanitize=False)
-                if not mol: return None, "ligand_load_error"
+                if not mol:
+                    return None, "ligand_load_error"
                 return self._process_ligand(mol)
-            else:
-                return self._process_protein(path)
+            return self._process_protein(path)
         except Exception as e:
+            logger.warning(f"[GNNParser] parse_file failed: {e}")
             return None, str(e)
 
-    def _process_ligand(self, mol):
+    def _process_protein(self, path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        coords: List[List[float]] = []
+        atomic_nums: List[List[int]] = []
+
         try:
-            # Легкая санитаризация для вычисления валентности и ароматики
+            mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
+            if mol:
+                conf = mol.GetConformer()
+                for atom in mol.GetAtoms():
+                    if self.ca_only:
+                        info = atom.GetPDBResidueInfo()
+                        if not info or info.GetName().strip() != "CA":
+                            continue
+                    else:
+                        if atom.GetSymbol() == 'H':
+                            continue
+                    pos = conf.GetAtomPosition(atom.GetIdx())
+                    coords.append([pos.x, pos.y, pos.z])
+                    atomic_nums.append([atom.GetAtomicNum()])
+        except Exception as e:
+            logger.info(f"[GNNParser] RDKit protein parse failed, falling back to Biopython: {e}")
+            coords, atomic_nums = [], []
+
+        if not coords:
             try:
-                Chem.SanitizeMol(mol, sanitizeOps=Chem.SanitizeFlags.SANITIZE_ALL ^ Chem.SanitizeFlags.SANITIZE_PROPERTIES)
-            except: pass
-            
+                pdb_parser = PDBParser(QUIET=True)
+                struct = pdb_parser.get_structure("prot", path)
+                for model in struct:
+                    for chain in model:
+                        for residue in chain:
+                            atoms = [residue['CA']] if self.ca_only and 'CA' in residue else residue.get_atoms()
+                            for atom in atoms:
+                                if not self.ca_only and atom.element == 'H':
+                                    continue
+                                c = atom.get_coord()
+                                coords.append([float(c[0]), float(c[1]), float(c[2])])
+                                elem = atom.element.upper().strip()
+                                a_num = 6 if elem == 'C' else 7 if elem == 'N' else 8 if elem == 'O' else 16 if elem == 'S' else 0
+                                atomic_nums.append([a_num])
+                    break
+            except Exception as e:
+                logger.warning(f"[GNNParser] Biopython fallback failed: {e}")
+                return None, f"Biopython fallback failed: {e}"
+
+        if not coords:
+            return None, "All protein parsing attempts failed"
+
+        return self._coords_to_graph(coords, atomic_nums)
+
+    def _coords_to_graph(self, coords: List[List[float]], atomic_nums: List[List[int]]) -> Tuple[Dict[str, Any], Optional[str]]:
+        """
+        Convert 3D coordinates and atomic features into a graph dictionary.
+        """
+        coords_arr = np.array(coords)
+        dist_mat = cdist(coords_arr, coords_arr)
+        adj = np.where((dist_mat < self.dist_threshold) & (dist_mat > 0))
+        edge_index = np.stack(adj).tolist()
+
+        return {
+            'x': atomic_nums,
+            'pos': coords_arr.tolist(),
+            'edge_index': edge_index,
+        }, None
+
+    def _process_ligand(self, mol: Chem.Mol) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        """
+        Convert a ligand molecule into graph data with node and positional features.
+        """
+        try:
+            if not mol:
+                return None, "ligand_load_error"
             xs = [[a.GetAtomicNum(), a.GetDegree(), int(a.GetIsAromatic())] for a in mol.GetAtoms()]
+            pos = mol.GetConformer().GetPositions().tolist()
             edges = []
             for b in mol.GetBonds():
                 i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-                # Граф неориентированный, добавляем связи в обе стороны
-                edges += [[i, j], [j, i]]
-                
-            return {'x': xs, 'edge_index': edges}, None
+                edges.extend([[i, j], [j, i]])
+            return {'x': xs, 'pos': pos, 'edge_index': edges}, None
         except Exception as e:
-            return None, f"ligand_graph_error: {str(e)}"
-
-    def _coords_to_graph(self, coords):
-        """Вспомогательный метод для перевода координат в граф"""
-        coords = np.array(coords)
-        dist_mat = cdist(coords, coords)
-        # Находим индексы атомов, расстояние между которыми меньше порога (и > 0, чтобы исключить сам атом)
-        adj = np.where((dist_mat < self.dist_threshold) & (dist_mat > 0))
-        return {'x': coords.tolist(), 'edge_index': np.stack(adj).tolist()}, None
-
-    def _process_protein(self, path):
-        # ПОПЫТКА 1: Быстрый RDKit
-        try:
-            mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
-            if mol and mol.GetNumConformers() > 0:
-                coords = []
-                conf = mol.GetConformer()
-                for atom in mol.GetAtoms():
-                    info = atom.GetPDBResidueInfo()
-                    if info and info.GetName().strip() == "CA":
-                        pos = conf.GetAtomPosition(atom.GetIdx())
-                        coords.append([pos.x, pos.y, pos.z])
-                if coords:
-                    return self._coords_to_graph(coords)
-        except:
-            pass # Если RDKit упал, тихо переходим к Biopython
-
-        # ПОПЫТКА 2: Надежный Biopython (Архитектурный подход)
-        try:
-            parser = PDBParser(QUIET=True)
-            struct = parser.get_structure("prot", path)
-
-            coords = []
-            for model in struct:
-                for chain in model:
-                    for residue in chain:
-                        if 'CA' in residue:
-                            # Вытаскиваем X, Y, Z у альфа-углерода
-                            c = residue['CA'].get_coord()
-                            coords.append([float(c[0]), float(c[1]), float(c[2])])
-                break # Берем только первую модель (Model 0), чтобы избежать дублей из NMR
-
-            if coords:
-                return self._coords_to_graph(coords)
-            return None, "empty_ca_coordinates_in_both_parsers"
-            
-        except Exception as e:
-            return None, f"biopython_fallback_error: {str(e)}"
+            logger.warning(f"[GNNParser] ligand processing failed: {e}")
+            return None, str(e)

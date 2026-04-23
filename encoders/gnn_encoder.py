@@ -2,108 +2,129 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, GATConv, GATv2Conv
-from torch_geometric.nn import SAGPooling, TopKPooling, global_max_pool, global_mean_pool
+from torch import Tensor
+from torch_geometric.nn import global_max_pool, global_mean_pool, GATConv, GATv2Conv, TransformerConv, SAGPooling, TopKPooling
+from typing import Any, Dict, Optional
+from utils import Utils
+from logger import logger
 
 
 class FlexGNNBlock(nn.Module):
-    def __init__(self, in_channels, hidden_channels=128, out_channels=128,
-                 num_layers=3, conv_type='gcn', heads=4, pool_type='max',
-                 hier_pool_type=None, hier_pool_ratio=0.5):
-        """
-        in_channels: Количество фич в каждом узле (например, 3 для координат [X, Y, Z])
-        hidden_channels: Размер скрытого слоя графовой свертки
-        out_channels: Размер итогового эмбеддинга (должен совпадать с embed_dim = 128)
-        num_layers: Количество слоев графовой свертки (обычно 2-4)
-        """
-        super(FlexGNNBlock, self).__init__()
+    """
+    Flexible GNN block for node feature encoding and graph-level pooling.
 
-        self.out_dim = out_channels
-        self.pool_type = pool_type.lower()
-        self.hier_pool_type = hier_pool_type.lower() if hier_pool_type is not None else None
+    Supports multiple graph convolution types and optional hierarchical pooling.
+    Designed to handle both protein and ligand graphs with customizable input adapters.
+
+    Example:
+        >>> block = FlexGNNBlock(in_channels=4, out_channels=128, num_layers=3, conv_type='gat_v2')
+        >>> x = torch.randn((32, 4))
+        >>> edge_index = torch.tensor([[0, 1], [1, 0]], dtype=torch.long)
+        >>> batch = torch.zeros(32, dtype=torch.long)
+        >>> out = block(x, edge_index, batch)
+        >>> print(out.shape)
+    """
+
+    def __init__(self, **kwargs: Any) -> None:
+        """
+        Initialize flexible GNN block.
+
+        Args:
+            **kwargs: Configuration for GNN block, including:
+                - in_channels: Input node feature dimension.
+                - hidden_channels: Hidden dimension for intermediate conv layers.
+                - out_channels: Output node embedding dimension.
+                - num_layers: Number of graph convolution layers.
+                - conv_type: Graph convolution type ('gat', 'gat_v2', 'transformer', 'egnn').
+                - activation: Activation name for intermediate layers.
+                - node_processor: Hierarchical pooling settings.
+                - aggregation: Graph pooling type settings.
+                - use_batch_norm: Whether to apply BatchNorm1d.
+        """
+        super().__init__()
+        heads = kwargs.get('heads', 4)
+        in_channels = kwargs.get('in_channels', 4)
+        out_channels = kwargs.get('out_channels', 128)
+
+        if in_channels == 1:
+            self.input_adapter = nn.Embedding(100, out_channels)
+        else:
+            self.input_adapter = nn.Linear(in_channels, out_channels)
+
+        num_layers = kwargs.get('num_layers', 3)
+        self.conv_type = kwargs.get('conv_type', 'gat_v2').lower()
+        hidden_channels = kwargs.get('hidden_channels', out_channels)
+        act_name = kwargs.get('activation', 'ReLU')
+        self.act = getattr(nn.functional, act_name.lower())
+
+        node_processor_settings = kwargs.get('node_processor', {})
+        hier_pool_type = node_processor_settings.get('selected', 'none')
+        hier_pool_args = node_processor_settings.get('available', {}).get(hier_pool_type, {})
+        aggregation_settings = kwargs.get('aggregation', {})
+        self.pool_type = aggregation_settings.get('selected', 'max')
+        self.pool_args = aggregation_settings.get('available', {}).get(self.pool_type, {})
+
+        self.use_bn = kwargs.get('use_batch_norm', True)
 
         self.convs = nn.ModuleList()
-        self.conv_type = conv_type.lower()
 
-        if self.hier_pool_type == 'sag':
-            self.hier_pool = SAGPooling(out_channels, ratio=0.5) # Оставить 50% атомов
-        elif self.hier_pool_type == 'topk':
-            self.hier_pool = TopKPooling(out_channels, ratio=0.5)
+        conv_map = {
+            'gat': GATConv,
+            'gat_v2': GATv2Conv,
+            'transformer': TransformerConv,
+            'egnn': None,
+        }
+        conv_class = conv_map.get(self.conv_type, GATv2Conv)
+        actual_conv_args = Utils.filter_kwargs(conv_class or GATv2Conv, kwargs)
+
+        if self.conv_type != 'egnn':
+            curr_dim = in_channels
+            for i in range(num_layers):
+                is_last = i == num_layers - 1
+                if is_last:
+                    self.convs.append(conv_class(curr_dim, out_channels, heads=heads, concat=False, **actual_conv_args))
+                else:
+                    h_dim = hidden_channels // heads
+                    self.convs.append(conv_class(curr_dim, h_dim, heads=heads, concat=True, **actual_conv_args))
+                    curr_dim = h_dim * heads
+        else:
+            logger.info("[GNN] EGNN special case selected; no standard GNN conv layers are built.")
+
+        if hier_pool_type == 'sag':
+            self.hier_pool = SAGPooling(out_channels, **hier_pool_args)
+        elif hier_pool_type == 'topk':
+            self.hier_pool = TopKPooling(out_channels, **hier_pool_args)
         else:
             self.hier_pool = None
 
-        self.hier_pool_ratio = hier_pool_ratio
+        self.batch_norm = nn.BatchNorm1d(out_channels) if self.use_bn else nn.Identity()
+        self.out_dim = out_channels
 
-
-        if self.conv_type == 'gat':
-            # GAT склеивает выходы от разных голов (concat=True по умолчанию),
-            # поэтому размер скрытого слоя для каждой головы нужно поделить на их количество
-            gat_hidden = hidden_channels // heads
-            
-            # Первый слой
-            self.convs.append(GATConv(in_channels, gat_hidden, heads=heads))
-            # Скрытые слои
-            for _ in range(num_layers - 2):
-                self.convs.append(GATConv(hidden_channels, gat_hidden, heads=heads))
-            # Последний слой: concat=False, чтобы усреднить головы и получить ровно out_channels
-            self.convs.append(GATConv(hidden_channels, out_channels, heads=heads, concat=False))
-            
-        if self.conv_type == 'gat_v2':
-            # GAT склеивает выходы от разных голов (concat=True по умолчанию),
-            # поэтому размер скрытого слоя для каждой головы нужно поделить на их количество
-            gat_hidden = hidden_channels // heads
-            
-            # Первый слой
-            self.convs.append(GATConv(in_channels, gat_hidden, heads=heads))
-            # Скрытые слои
-            for _ in range(num_layers - 2):
-                self.convs.append(GATv2Conv(hidden_channels, gat_hidden, heads=heads))
-            # Последний слой: concat=False, чтобы усреднить головы и получить ровно out_channels
-            self.convs.append(GATv2Conv(hidden_channels, out_channels, heads=heads, concat=False))
-
-        elif self.conv_type == 'gcn':
-            # Классический GCN (как мы писали ранее)
-            self.convs.append(GCNConv(in_channels, hidden_channels))
-            for _ in range(num_layers - 2):
-                self.convs.append(GCNConv(hidden_channels, hidden_channels))
-            self.convs.append(GCNConv(hidden_channels, out_channels))
-            
-        else:
-            raise ValueError(f"Неизвестный тип свертки: {conv_type}. Используйте 'gcn' или 'gat'.")
-            
-        self.batch_norm = nn.BatchNorm1d(out_channels)
-
-    def forward(self, x, edge_index, batch):
+    def forward(self, x: Tensor, edge_index: Tensor, batch: Tensor) -> Tensor:
         """
-        x: Тензор фич узлов [num_nodes, in_channels]
-        edge_index: Тензор связей [2, num_edges]
-        batch: Вектор, указывающий, какому графу в батче принадлежит каждый узел
+        Forward pass through the graph encoder.
+
+        Args:
+            x: Node features tensor with shape [num_nodes, in_channels].
+            edge_index: Edge indices tensor with shape [2, num_edges].
+            batch: Batch assignment tensor for pooling.
+
+        Returns:
+            Graph-level embedding tensor after pooling.
         """
         x = x.float()
-        # Прогоняем через графовые свертки
-        for i, conv in enumerate(self.convs):
-            x = conv(x, edge_index)
-            if i != len(self.convs) - 1:
-                x = F.relu(x)
-                # x = F.elu(x) if self.conv_type == 'gat' else F.relu(x)
-                x = F.dropout(x, p=0.1, training=self.training)
+        if self.conv_type != 'egnn':
+            for i, conv in enumerate(self.convs):
+                x = conv(x, edge_index)
+                if i != len(self.convs) - 1:
+                    x = self.act(x)
 
         x = self.batch_norm(x)
-        
-        # 2. Опциональный Пулинг
-        if self.hier_pool_type is not None:
-            # Эти слои возвращают (x, edge_index, batch, ...)
-            x, edge_index, _, batch, _, _ = self.hier_pool(x, edge_index, batch=batch)
-            # После SAGPool у нас всё еще ГРАФ. Чтобы отдать его в Трио, 
-            # нам всё равно нужно сделать финальный Readout:
+
         if self.pool_type == 'max':
-            x = global_max_pool(x, batch)
-        elif self.pool_type == 'mean':
-            x = global_mean_pool(x, batch)
-        elif self.pool_type is None:
-            # Возвращаем кортеж из узлов и их принадлежности к батчу
-            # Это пригодится будущему квантовому attention-пулингу!
-            return x, batch 
-            
+            return global_max_pool(x, batch)
+        if self.pool_type == 'mean':
+            return global_mean_pool(x, batch)
+        if self.pool_type is None:
+            return x
         return x

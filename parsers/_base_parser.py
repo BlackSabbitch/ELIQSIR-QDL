@@ -1,20 +1,21 @@
-# parsers/base_parser.py
+# parsers/_base_parser.py
 
 from abc import ABC, abstractmethod
+from typing import Any, Optional, Tuple
 
 
 class BaseParser(ABC):
     @abstractmethod
-    def parse_file(self, path):
-        """Парсинг файла с диска. Возвращает (data, error_string)"""
+    def parse_file(self, path: str) -> Tuple[Optional[Any], Optional[str]]:
+        """Parse a file from disk and return parsed data and an optional error."""
         pass
 
     @abstractmethod
-    def _process_ligand(self, mol):
-        """Обработка объекта молекулы лиганда"""
+    def _process_ligand(self, mol: Any) -> Tuple[Optional[Any], Optional[str]]:
+        """Process a ligand object into parser-specific output."""
         pass
 
     @abstractmethod
-    def _process_protein(self, path_or_bytes, is_file=True):
-        """Обработка белка из пути или байтов"""
+    def _process_protein(self, path_or_bytes: Any, is_file: bool = True) -> Tuple[Optional[Any], Optional[str]]:
+        """Process protein data from a path or byte stream."""
         pass
