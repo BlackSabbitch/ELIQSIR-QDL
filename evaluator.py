@@ -101,19 +101,15 @@ class Evaluator:
         preds, targets = [], []
         with torch.no_grad():
             for batch in loader:
-                *inputs, targets = batch
+                *inputs, target = batch
                 inputs = [inp.to(self.device) if hasattr(inp, 'to') else {k: v.to(self.device) for k, v in inp.items()} for inp in inputs]
+                # inputs = [
+                #     x.to(self.device) if hasattr(x, "to") else x
+                #     for x in inputs
+                #     ]
                 y_hat = self.model(tuple(inputs))
                 preds.extend(y_hat.cpu().view(-1).tolist())
-                targets.extend(targets.tolist())
-            # for prot, lig, pock, y in loader:
-            #     prot = prot.to(self.device) if hasattr(prot, 'to') else {k: v.to(self.device) for k, v in prot.items()}
-            #     lig = lig.to(self.device) if hasattr(lig, 'to') else {k: v.to(self.device) for k, v in lig.items()}
-            #     pock = pock.to(self.device) if hasattr(pock, 'to') else {k: v.to(self.device) for k, v in pock.items()}
-            #     # IMPORTANT: Pass TUPLE of three elements (double parentheses)
-            #     y_hat = self.model(tuple(inputs))
-            #     preds.extend(y_hat.cpu().view(-1).tolist())
-            #     targets.extend(y.tolist())
+                targets.extend(target.tolist())
         
         preds = np.array(preds)
         targets = np.array(targets)

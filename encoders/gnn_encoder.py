@@ -76,6 +76,9 @@ class FlexGNNBlock(nn.Module):
         }
         conv_class = conv_map.get(self.conv_type, GATv2Conv)
         actual_conv_args = Utils.filter_kwargs(conv_class or GATv2Conv, kwargs)
+        # Prevent duplicate explicit arguments when building convolutions.
+        for forbidden_key in ['in_channels', 'out_channels', 'heads', 'concat']:
+            actual_conv_args.pop(forbidden_key, None)
 
         if self.conv_type != 'egnn':
             curr_dim = in_channels

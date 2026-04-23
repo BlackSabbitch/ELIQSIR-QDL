@@ -72,9 +72,9 @@ class HybridTrainer:
         self.sched_classic = self._build_scheduler(self.opt_classic, c_opt_cfg.get('scheduler'))
         self.sched_quantum = self._build_scheduler(self.opt_quantum, q_opt_cfg.get('scheduler'))
 
-        # 3. Loss function (ranking_mse in config, MSE for simplicity for now)
+        # 3. Loss function
         self.criterion = get_loss_function(config['training'])
-        print(f"Используем Loss: {config['training']['loss_fn']}")
+        print(f"Используем Loss: {config['training']['loss_fn']['selected']}")
 
     def _build_scheduler(self, optimizer, sched_cfg):
         if not sched_cfg: return None
@@ -169,7 +169,7 @@ class HybridTrainer:
         """
         best_val_r = -1.0
         best_epoch = 0
-        history = {
+        self.history = {
             'train_loss': [], 'val_rmse': [], 'val_pearson': [], 
             'val_ci': [], 'best_y_true': None, 'best_y_pred': None
             }
@@ -182,21 +182,18 @@ class HybridTrainer:
                        f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
 
             rmse, r_val, ci_val, preds, targets = self.evaluator.evaluate(val_loader)
-            history['train_loss'].append(train_loss)
-            history['val_rmse'].append(rmse)
-            history['val_pearson'].append(r_val)
-            history['val_ci'].append(ci_val)
-            if r_val >= max(history['val_pearson']):
-                history['best_y_true'] = targets.tolist()
-                history['best_y_pred'] = preds.tolist()
+            self.history['train_loss'].append(train_loss)
+            self.history['val_rmse'].append(rmse)
+            self.history['val_pearson'].append(r_val)
+            self.history['val_ci'].append(ci_val)
+            if r_val >= max(self.history['val_pearson']):
+                self.history['best_y_true'] = targets.tolist()
+                self.history['best_y_pred'] = preds.tolist()
 
             with open(f"{exp_dir}/history.json", 'w') as f:
-                json.dump(history, f, indent=4)
+                json.dump(self.history, f, indent=4)
             torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
 
-        self.history = history
-
-            # Печатаем итоги эпохи (в статье используются именно эти метрики [cite: 515, 516, 521])
             logger.info(f"   ∟ Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}")
             logger.info("-" * 60)
 
@@ -208,10 +205,13 @@ class HybridTrainer:
             
             self.step_schedulers(val_loss)
 
-        return history, best_epoch, best_val_r
+        return best_epoch, best_val_r
 
-    def test(self, test_loader, exp_dir, best_epoch, history, show_plots=False, save_plots=True):
-        self.evaluator.plot_history(exp_dir, history, show=show_plots, save=save_plots)
+    def test(self, test_loader, exp_dir, best_epoch, show_plots=False, save_plots=True):
+        if hasattr(self, 'history'):
+            self.evaluator.plot_history(exp_dir, self.history, show=show_plots, save=save_plots)
+        else:
+            logger.info("[TEST] No training history available for plotting.")
 
         logger.info("\n================ FINAL TEST (CORE SET) ================")
         # Подгружаем веса лучшей эпохи (в идеале нужно написать логику загрузки лучшего .pt,

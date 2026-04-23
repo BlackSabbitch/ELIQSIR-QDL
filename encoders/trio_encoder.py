@@ -125,7 +125,8 @@ def build_trio_encoder(config_dict: Dict[str, Any]) -> TrioEncoder:
             # Get appropriate vocab depending on position (0:prot, 1:lig, 2:pock)
             vocab = lig_v if i == 1 else prot_v
             len_vocab = len(vocab)
-            params = trio_cfg['cnn_params']
+            params = dict(trio_cfg['cnn_params'])
+            params.pop('vocab_size', None)
             enc = FlexCNNBlock(vocab_size=len_vocab, **params)
 
         elif char == 'G':
