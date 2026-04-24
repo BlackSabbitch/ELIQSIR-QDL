@@ -1,4 +1,4 @@
-# esm_enricher.py
+# enricher.py
 
 import torch
 import esm

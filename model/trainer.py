@@ -1,3 +1,5 @@
+# model/trainer.py
+
 import torch
 import torch.nn as nn
 from tqdm import tqdm
@@ -175,7 +177,7 @@ class HybridTrainer:
                 val_loss += self.criterion(preds, targets).item()
         return val_loss / len(loader)
 
-    def train(self, train_loader, val_loader, exp_dir) -> Tuple[int, float]:
+    def train(self, train_loader, val_loader, exp_dir, save_only_best_epoch=True) -> Tuple[int, float]:
         """
         Run the complete training loop.
 
@@ -207,7 +209,9 @@ class HybridTrainer:
 
             with open(f"{exp_dir}/history.json", 'w') as f:
                 json.dump(self.history, f, indent=4)
-            torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
+
+            if not save_only_best_epoch:
+                torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
 
             log_info(f"Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="PROGRESS")
             log_info("-" * 60, stage="PROGRESS")
@@ -217,7 +221,7 @@ class HybridTrainer:
                 best_epoch = (epoch + 1)
                 torch.save(self.model.state_dict(), f"{exp_dir}/best_model.pt")
                 log_info(f"New best R: {best_val_r:.4f} (Saved to best_model.pt)", stage="TRAINER")
-            
+
             self.step_schedulers(val_loss)
 
         return best_epoch, best_val_r
@@ -236,6 +240,7 @@ class HybridTrainer:
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path))
             log_info(f"Успешно загружены веса лучшей эпохи {best_epoch} из {best_model_path}", stage="TRAINER")
+            log_info(f"Weights for the best model (epoch {best_epoch}) loaded from {best_model_path}", stage="TEST")
 
         test_rmse, test_r, test_ci, _, _ = self.evaluator.evaluate(test_loader)
         log_info(f"FINAL TEST -> RMSE: {test_rmse:.4f} | Pearson R: {test_r:.4f} | CI: {test_ci:.4f}", stage="TEST")

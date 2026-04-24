@@ -1,3 +1,5 @@
+# parsers/gnn_parser.py
+
 import numpy as np
 from typing import Any, Dict, List, Optional, Tuple
 from rdkit import Chem

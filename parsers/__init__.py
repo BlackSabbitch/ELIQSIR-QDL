@@ -1,4 +1,4 @@
-# parsers.__init__.py
+# parsers/__init__.py
 
 from parsers.cnn_parser import CNNParser
 from parsers.gnn_parser import GNNParser

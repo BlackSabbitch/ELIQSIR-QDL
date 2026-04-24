@@ -72,19 +72,3 @@ class Utils:
         """
         sig = inspect.signature(func)
         return {k: v for k, v in kwargs.items() if k in sig.parameters}
-
-    @staticmethod
-    def handle_metadata(config, train_ds, val_ds, test_ds):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        exp_dir = f"runs/{config['experiment_name']}_{timestamp}"
-        os.makedirs(exp_dir, exist_ok=True)
-        log_info(f"Файлы сохраняются сюда: {exp_dir}", stage="UTILS")
-        config['dataset']['actual_sizes'] = {
-            'train': len(train_ds),
-            'val': len(val_ds),
-            'test': len(test_ds)
-        }
-        with open(f"{exp_dir}/config.json", 'w') as f:
-            json.dump(config, f, indent=4)
-
-        return exp_dir

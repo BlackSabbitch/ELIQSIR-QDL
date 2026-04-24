@@ -11,11 +11,10 @@ from extractor import PDBBindOrchestrator
 from tokenizer import UniversalPDBBindDataset
 from evaluator import Evaluator
 from splitter import PDBBindSplitter
-from utils import Utils
 from model.model_builder import UHSMBuilder
 from parsers.cnn_parser import CNNParser
 from parsers.gnn_parser import GNNParser
-from logger import log_info, setup_file_logging
+from logger import log_info, setup_file_logging, get_ascii_plot, log_side_by_side, log_residuals_hist
 from model.trainer import HybridTrainer
 
 
@@ -93,15 +92,69 @@ class ExperimentRunner:
         test_loader = DataLoader(test_ds, batch_size=self.config['dataset']['batch_size'], shuffle=False)
         val_loader   = DataLoader(val_ds, batch_size=self.config['dataset']['batch_size'], shuffle=False)
 
-        exp_dir = Utils.handle_metadata(self.config, train_ds, val_ds, test_ds)
+        self.config['dataset']['actual_sizes'] = {
+            'train': len(train_ds),
+            'val': len(val_ds),
+            'test': len(test_ds)
+        }
+
+        with open(f"{self.exp_run_dir}/config.json", 'w') as f:
+            json.dump(self.config, f, indent=4)
+
         model = UHSMBuilder.build_model_from_config(self.config)
         evaluator = Evaluator(model, self.device)
 
         log_info(f"Launch on: {self.device}", stage="EXPERIMENT")
 
         trainer = HybridTrainer(model, evaluator, self.config, self.device)
-        best_epoch, best_val_r = trainer.train(train_loader, val_loader, exp_dir)
-        trainer.test(test_loader, exp_dir, best_epoch)
+        best_epoch, _ = trainer.train(train_loader, val_loader, self.exp_run_dir, self.config['training']['save_only_best_epoch'])
+        trainer.test(test_loader, self.exp_run_dir, best_epoch)
+
+        log_info("Generating ASCII performance summary...", stage="SUMMARY")
+
+        loss_chart = get_ascii_plot(trainer.history["train_loss"], title="Learning Curve (Loss)")
+        log_info(f"Loss Curve:\n" + "\n".join(loss_chart), stage="SUMMARY")
+
+        rmse_chart = get_ascii_plot(trainer.history["val_rmse"], title="Validation RMSE")
+        log_info(f"RMSE Curve:\n" + "\n".join(rmse_chart), stage="SUMMARY")
+
+        r_chart = get_ascii_plot(trainer.history["val_pearson"], title="Correlation (Pearson R)")
+        log_info(f"Pearson (R) Curve:\n" + "\n".join(r_chart), stage="SUMMARY")
+
+        ci_chart = get_ascii_plot(trainer.history["val_ci"], title="Ranking Accuracy (CI)")
+        log_info(f"Concordancy Index Curve:\n" + "\n".join(ci_chart), stage="SUMMARY")
+
+        y_true = trainer.history['best_y_true']
+        y_pred = trainer.history['best_y_pred']
+
+        act_vs_pred_chart = get_ascii_plot([y_true, y_pred], title="Predicted = f(Actual)")
+        log_info(f"Concordancy Index Curve:\n" + "\n".join(act_vs_pred_chart), stage="SUMMARY")
+
+        log_info("Generating Multi-column ASCII Dashboard...", stage="SUMMARY")
+
+        dashboard_loss_rmse = log_side_by_side(
+            trainer.history["train_loss"], "Learning Curve (Loss)",
+            trainer.history["val_rmse"], "Validation RMSE"
+        )
+        log_info(dashboard_loss_rmse, stage="SUMMARY")
+
+        dashboard_r_ci = log_side_by_side(
+            trainer.history["val_pearson"], "Correlation (Pearson R)",
+            trainer.history["val_ci"], "Ranking Accuracy (CI)"
+        )
+        log_info(dashboard_r_ci, stage="SUMMARY")
+
+        y_true = trainer.history['best_y_true']
+        y_pred = trainer.history['best_y_pred']
+
+        dashboar_act_vs_pred_residuals = log_side_by_side(
+            [y_true, y_pred], "Predicted = f(Actual)",
+            trainer.history["val_rmse"], "Validation RMSE",
+            is_scatter=True
+        )
+        log_info(dashboar_act_vs_pred_residuals, stage="SUMMARY")
+
+        log_info("Experiment completed successfully.", stage="EXPERIMENT")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PDBBind Experiment")
@@ -116,7 +169,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
     runner = ExperimentRunner(config_path=args.config, extract=args.extract)
     runner.prepare()
-    runner.run()
+
+    try:
+        runner.run()
+    except Exception as e:
+        import traceback
+        err_path = os.path.join(runner.exp_run_dir, "err_log.txt")
+        error_msg = traceback.format_exc()
+        log_info(f"ERROR message saved to: {err_path}", stage="CRASH")
+
+        with open(err_path, "w", encoding="utf-8") as f:
+            f.write(error_msg)
+
+        raise e
 
 """
 python run.py --config configs/gnn_test.json    # path to the custom config

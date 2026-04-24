@@ -24,7 +24,7 @@ class UHSMBuilder:
         selected, args = cls._get_cfg(cfg_entry)
         
         # Обрабатываем все типы голов и адаптеров
-        if selected in ["mlp_head", "linear_bottleneck", "linear_tanh"]:
+        if selected in ["MLP", "linear_bottleneck", "linear_tanh"]:
             layers = []
             curr_dim = in_dim
             # Поддерживаем и hidden_dims, и hidden_layers для гибкости
@@ -40,10 +40,10 @@ class UHSMBuilder:
             layers.append(nn.Linear(curr_dim, args.get("out_dim", 1)))
             return nn.Sequential(*layers)
             
-        elif selected == "linear_head":
+        elif selected == "Linear":
             return nn.Linear(in_dim, args.get("out_dim", 1))
             
-        elif selected == "quantum_head":
+        elif selected == "VQE":
             # Особый случай: Квантовая голова как основная
             q_in_dim = args.get("in_dim", in_dim)
             adapter = nn.Sequential(nn.Linear(in_dim, q_in_dim), nn.Tanh())

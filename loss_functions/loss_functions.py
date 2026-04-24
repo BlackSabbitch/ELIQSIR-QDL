@@ -103,6 +103,7 @@ class SlopeRegularizationLoss(nn.Module):
         target_mean = target_flat.mean()
         numerator = ((pred_flat - pred_mean) * (target_flat - target_mean)).sum()
         denominator = ((pred_flat - pred_mean) ** 2).sum() + 1e-8
+        denominator = denominator.clamp(min=1e-4)
         slope = numerator / denominator
 
         if self.one_sided:
