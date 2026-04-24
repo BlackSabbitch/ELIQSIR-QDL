@@ -9,7 +9,7 @@ from tqdm import tqdm
 from multiprocessing import Pool
 from collections import Counter
 from typing import List, Optional, Dict, Any, Tuple
-from logger import logger
+from logger import log_info, log_warn
 
 
 class PDBBindOrchestrator:
@@ -154,16 +154,16 @@ class PDBBindOrchestrator:
             return os.path.realpath(path).startswith(os.path.realpath(base))
 
         targets = self.get_complex_ids(subset)
-        logger.info(f"[EXTRACTION] Unpacking {len(targets)} complexes...")
+        log_info(f"Unpacking {len(targets)} complexes...", stage="EXTRACTION")
         
         with tarfile.open(self.archive_path, 'r:gz') as tar:
-            for member in tqdm(tar):
+            for member in tqdm(tar, desc=f"Extracting {subset}", unit="file"):
                 parts = member.name.split('/')
                 if len(parts) >= 2 and parts[1] in targets:
                     target_path = os.path.join(self.dest_path, member.name)
                     if not os.path.exists(target_path) and is_safe_path(self.dest_path, target_path):
                         tar.extract(member, path=self.dest_path)
-        logger.info("[EXTRACTION] Unpacking completed.")
+        log_info("Unpacking completed.", stage="EXTRACTION")
 
     def _parse_single_complex(self, pdb_id: str) -> Tuple[str, Optional[Any], Optional[str]]:
         """
@@ -226,7 +226,7 @@ class PDBBindOrchestrator:
             DataFrame containing parsed molecular data and affinity labels.
         """
         results, errors = [], []
-        logger.info(f"[BUILD] Starting parallel parsing on {n_jobs if n_jobs > 0 else os.cpu_count()} cores...")
+        log_info(f"Starting parallel parsing on {n_jobs if n_jobs > 0 else os.cpu_count()} cores...", stage="BUILD")
         with Pool(n_jobs if n_jobs > 0 else os.cpu_count()) as pool:
             for pid, data, err in tqdm(pool.imap(self._parse_single_complex, ids), total=len(ids)):
                 if data:
@@ -238,9 +238,9 @@ class PDBBindOrchestrator:
                 else:
                     errors.append(err)
 
-        logger.info(f"[BUILD] Success: {len(results)}, Errors: {len(errors)}")
+        log_info(f"Success: {len(results)}, Errors: {len(errors)}", stage="BUILD")
         if errors:
-            logger.warning(f"[BUILD ERRORS] {Counter(errors)}")
+            log_warn(f"Errors: {Counter(errors)}", stage="BUILD")
         return pd.DataFrame(results)
 
     def build_dataset(self, subset: str = "refined", n_jobs: int = -1,
@@ -278,7 +278,7 @@ class PDBBindOrchestrator:
         remaining_cols = [col for col in df.columns if col not in existing_cols]
         df = df[existing_cols + remaining_cols]
 
-        name = file_name if file_name else f"pdbbind_{self.mode}"
+        name = file_name if file_name else f"pdbbind_{subset}_{self.mode}"
         self.full_path = os.path.join(save_dir, f"{name}.{fmt}")
         actual_comp = compression if fmt == "parquet" else (None if compression == "snappy" else compression)
 
@@ -304,7 +304,7 @@ class PDBBindOrchestrator:
         elif fmt == "csv":
             df.to_csv(self.full_path, index=False, compression=actual_comp)
             
-        logger.info(f"[SAVE] Dataset saved to {self.full_path} (compression: {actual_comp})")
+        log_info(f"Dataset saved to {self.full_path} (compression: {actual_comp})", stage="SAVE")
 
     def _save_metadata(self, subset: str, save_dir: str, name: str, fmt: str, actual_comp: Optional[str], n_complexes: int) -> None:
         """
@@ -334,4 +334,4 @@ class PDBBindOrchestrator:
         with open(self.full_meta_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=4, ensure_ascii=False)
 
-        logger.info(f"[SAVE] Metadata saved to {self.full_meta_path}")
+        log_info(f"Metadata saved to {self.full_meta_path}", stage="SAVE")

@@ -9,7 +9,7 @@ import pandas as pd
 from rdkit import Chem
 from rdkit.Chem.Scaffolds import MurckoScaffold
 from typing import Tuple, Optional, List
-from logger import logger
+from logger import log_info
 
 
 class PDBBindSplitter:
@@ -207,7 +207,7 @@ class PDBBindSplitter:
     # UNIFIED INTERFACE
     # ======================
     @staticmethod
-    def split(df: pd.DataFrame, strategy: str = "random", val_frac: float = 0.1, seed: int = 42) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    def split(df: pd.DataFrame, conf_splitter: dict) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Unified interface for all splitting strategies.
 
@@ -223,19 +223,27 @@ class PDBBindSplitter:
         Raises:
             ValueError: If strategy is not supported.
         """
-        logger.info(f"[SPLIT] Strategy: {strategy}")
+        strategy = conf_splitter['selected']
+        params = conf_splitter['available'][strategy]
+
+        log_info(f"Strategy: {strategy}", stage="SPLIT")
 
         if strategy == "random":
-            return PDBBindSplitter.random_split(df, val_frac, seed)
+            train_df, val_df = PDBBindSplitter.random_split(df, **params)
 
         elif strategy == "scaffold":
-            return PDBBindSplitter.scaffold_split_strict(df, val_frac, seed)
+            train_df, val_df = PDBBindSplitter.scaffold_split_strict(df, **params)
 
         elif strategy == "scaffold_balanced":
-            return PDBBindSplitter.scaffold_split_balanced(df, val_frac, seed)
+            train_df, val_df = PDBBindSplitter.scaffold_split_balanced(df, **params)
 
         elif strategy == "cold_protein":
-            return PDBBindSplitter.cold_protein_split(df, val_frac, seed)
+            train_df, val_df = PDBBindSplitter.cold_protein_split(df, **params)
 
         else:
             raise ValueError(f"Unknown split strategy: {strategy}")
+        
+        # Log split results
+        log_info(f"Total: {len(df)} | Train: {len(train_df)} | Val: {len(val_df)}", stage="SPLIT")
+        
+        return train_df, val_df

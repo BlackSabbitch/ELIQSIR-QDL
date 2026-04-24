@@ -3,7 +3,7 @@
 import math
 import inspect
 from typing import Dict, Any, Callable
-from logger import *
+from logger import log_info
 from datetime import datetime
 import os
 import json
@@ -78,7 +78,7 @@ class Utils:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         exp_dir = f"runs/{config['experiment_name']}_{timestamp}"
         os.makedirs(exp_dir, exist_ok=True)
-        print(f"!!! ФАЙЛЫ СОХРАНЯЮТСЯ СЮДА: {exp_dir} !!!")
+        log_info(f"Файлы сохраняются сюда: {exp_dir}", stage="UTILS")
         config['dataset']['actual_sizes'] = {
             'train': len(train_ds),
             'val': len(val_ds),

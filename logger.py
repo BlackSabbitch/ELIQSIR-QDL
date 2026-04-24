@@ -2,28 +2,49 @@
 
 import logging
 
-
-# Custom formatter for prefixed logging
-class PrefixedFormatter(logging.Formatter):
+class StageFormatter(logging.Formatter):
     def format(self, record):
-        if hasattr(record, 'prefix'):
-            record.msg = f"[{record.prefix}] {record.msg}"
+        # Если префикс не передан, ставим пустую заглушку, 
+        # чтобы форматтер не выкинул ошибку
+        if not hasattr(record, 'stage'):
+            record.stage = "GENERAL"
         return super().format(record)
 
-# Setup logging with custom formatter
-logger = logging.getLogger(__name__)
+# Настройка
+logger = logging.getLogger("AppCore")
 handler = logging.StreamHandler()
-formatter = PrefixedFormatter('%(levelname)s - %(message)s')
+
+# Вот здесь задаем твою схему [LEVEL][STAGE]
+formatter = StageFormatter('[%(levelname)s][%(stage)s] %(message)s')
+
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 logger.setLevel(logging.INFO)
 
-# Convenience functions for custom prefixes
-def log_error_type_1(msg: str) -> None:
-    logger.info(msg, extra={'prefix': 'ERROR TYPE 1'})
+def _log(msg, stage, level):
+    logger.log(level, msg, extra={'stage': stage})
 
-def log_error_type_2(msg: str) -> None:
-    logger.info(msg, extra={'prefix': 'ERROR TYPE 2'})
+# Публичный API твоего логгера
+def log_info(msg, stage="GENERAL"):
+    _log(msg, stage, logging.INFO)
 
-def log_info_type_3(msg: str) -> None:
-    logger.info(msg, extra={'prefix': 'INFORMATION TYPE 3'})
+def log_warn(msg, stage="GENERAL"):
+    _log(msg, stage, logging.WARNING)
+
+def log_error(msg, stage="GENERAL"):
+    _log(msg, stage, logging.ERROR)
+
+def log_debug(msg, stage="GENERAL"):
+    _log(msg, stage, logging.DEBUG)
+
+def setup_file_logging(log_path):
+    # Создаем обработчик для файла
+    fh = logging.FileHandler(log_path)
+    fh.setLevel(logging.INFO)
+    
+    # Применяем тот же форматтер
+    formatter = StageFormatter('[%(levelname)s][%(stage)s] - %(message)s')
+    fh.setFormatter(formatter)
+    
+    # Добавляем к существующему логгеру
+    logger.addHandler(fh)

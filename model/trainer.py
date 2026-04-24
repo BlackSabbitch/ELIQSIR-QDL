@@ -5,7 +5,7 @@ from model.model import UniversalHybridSlotModel
 from encoders.original_quantum_encoder import QuantumReUploadingLayer
 from utils import Utils
 from loss_functions.loss_functions import get_loss_function
-from logger import *
+from logger import log_info, log_warn
 import json
 import os
 from typing import Tuple
@@ -65,23 +65,37 @@ class HybridTrainer:
         # 2. Initialize optimizers from config
         c_opt_cfg = self.train_cfg['optimizers']['classic']
         self.opt_classic = getattr(torch.optim, c_opt_cfg['type'])(classic_params, **c_opt_cfg['params'])
+        log_info(f"Classic: {c_opt_cfg['type']} with {len(classic_params)} parameters", stage="OPTIMIZER")
         
         q_opt_cfg = self.train_cfg['optimizers']['quantum']
-        self.opt_quantum = getattr(torch.optim, q_opt_cfg['type'])(quantum_params, **q_opt_cfg['params'])
+        if len(quantum_params) > 0:
+            self.opt_quantum = getattr(torch.optim, q_opt_cfg['type'])(quantum_params, **q_opt_cfg['params'])
+            log_info(f"Quantum: {q_opt_cfg['type']} with {len(quantum_params)} parameters", stage="OPTIMIZER")
+        else:
+            self.opt_quantum = None
+            log_warn(f"Quantum: No quantum parameters found, optimizer disabled", stage="OPTIMIZER")
 
         self.sched_classic = self._build_scheduler(self.opt_classic, c_opt_cfg.get('scheduler'))
-        self.sched_quantum = self._build_scheduler(self.opt_quantum, q_opt_cfg.get('scheduler'))
+        self.sched_quantum = self._build_scheduler(self.opt_quantum, q_opt_cfg.get('scheduler')) if self.opt_quantum else None
 
         # 3. Loss function
         self.criterion = get_loss_function(config['training'])
-        print(f"Используем Loss: {config['training']['loss_fn']['selected']}")
+        log_info(f"Используем Loss: {config['training']['loss_fn']['selected']}", stage="TRAINER")
 
     def _build_scheduler(self, optimizer, sched_cfg):
-        if not sched_cfg: return None
+        if not sched_cfg:
+            return None
         # Например: ReduceLROnPlateau или CosineAnnealingLR
-        return getattr(torch.optim.lr_scheduler, sched_cfg['type'])(
-            optimizer, **sched_cfg['params']
-        )
+        sched_cls = getattr(torch.optim.lr_scheduler, sched_cfg['type'])
+        params = sched_cfg.get('params', {}) or {}
+        valid_params = Utils.filter_kwargs(sched_cls.__init__, params)
+        invalid_params = [key for key in params if key not in valid_params]
+        if invalid_params:
+            log_warn(
+                f"Ignoring unsupported params for {sched_cfg['type']}: {invalid_params}",
+                stage="SCHEDULER"
+            )
+        return sched_cls(optimizer, **valid_params)
 
     def step_schedulers(self, metrics):
         """Обновление шага обучения"""
@@ -92,7 +106,7 @@ class HybridTrainer:
             else:
                 self.sched_classic.step()
         
-        if self.sched_quantum:
+        if self.sched_quantum and self.opt_quantum:
             self.sched_quantum.step()
 
     def train_epoch(self, loader) -> float:
@@ -116,7 +130,8 @@ class HybridTrainer:
             _, _, _, _, targets = batch
             
             self.opt_classic.zero_grad()
-            self.opt_quantum.zero_grad()
+            if self.opt_quantum:
+                self.opt_quantum.zero_grad()
             
             # Forward pass
             preds = self.model(batch).squeeze()
@@ -127,7 +142,8 @@ class HybridTrainer:
             
             # Step both optimizers
             self.opt_classic.step()
-            self.opt_quantum.step()
+            if self.opt_quantum:
+                self.opt_quantum.step()
             
             current_loss = loss.item()
             epoch_loss += current_loss
@@ -178,8 +194,7 @@ class HybridTrainer:
             train_loss = self.train_epoch(train_loader)
             val_loss = self.validate(val_loader)
             
-            logger.info(f"[PROGRESS] Epoch {epoch+1}/{self.train_cfg['epochs']}, "
-                       f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
+            log_info(f"Epoch {epoch+1}/{self.train_cfg['epochs']}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}", stage="PROGRESS")
 
             rmse, r_val, ci_val, preds, targets = self.evaluator.evaluate(val_loader)
             self.history['train_loss'].append(train_loss)
@@ -194,14 +209,14 @@ class HybridTrainer:
                 json.dump(self.history, f, indent=4)
             torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
 
-            logger.info(f"   ∟ Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}")
-            logger.info("-" * 60)
+            log_info(f"Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="PROGRESS")
+            log_info("-" * 60, stage="PROGRESS")
 
             if r_val > best_val_r:
                 best_val_r = r_val
                 best_epoch = (epoch + 1)
                 torch.save(self.model.state_dict(), f"{exp_dir}/best_model.pt")
-                logger.info(f"[NEW BEST R !] {best_val_r:.4f} (Saved to best_model.pt)")
+                log_info(f"New best R: {best_val_r:.4f} (Saved to best_model.pt)", stage="TRAINER")
             
             self.step_schedulers(val_loss)
 
@@ -211,19 +226,19 @@ class HybridTrainer:
         if hasattr(self, 'history'):
             self.evaluator.plot_history(exp_dir, self.history, show=show_plots, save=save_plots)
         else:
-            logger.info("[TEST] No training history available for plotting.")
+            log_info("No training history available for plotting.", stage="TEST")
 
-        logger.info("\n================ FINAL TEST (CORE SET) ================")
+        log_info("FINAL TEST (CORE SET)", stage="TEST")
         # Подгружаем веса лучшей эпохи (в идеале нужно написать логику загрузки лучшего .pt,
         # но пока протестируем на весах последней эпохи)
 
         best_model_path = f"{exp_dir}/best_model.pt"
         if os.path.exists(best_model_path):
             self.model.load_state_dict(torch.load(best_model_path))
-            print(f"Успешно загружены веса лучшей эпохи {best_epoch} из {best_model_path}")
+            log_info(f"Успешно загружены веса лучшей эпохи {best_epoch} из {best_model_path}", stage="TRAINER")
 
         test_rmse, test_r, test_ci, _, _ = self.evaluator.evaluate(test_loader)
-        print(f"FINAL TEST -> RMSE: {test_rmse:.4f} | Pearson R: {test_r:.4f} | CI: {test_ci:.4f}")
+        log_info(f"FINAL TEST -> RMSE: {test_rmse:.4f} | Pearson R: {test_r:.4f} | CI: {test_ci:.4f}", stage="TEST")
         
         # Сохраняем результаты теста
         with open(f"{exp_dir}/test_results.json", 'w') as f:

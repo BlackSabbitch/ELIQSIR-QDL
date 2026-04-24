@@ -6,7 +6,7 @@ from encoders.trio_encoder import build_trio_encoder
 from encoders.original_quantum_encoder import QuantumReUploadingLayer
 from typing import Optional, Tuple, Union
 from model.model import UniversalHybridSlotModel
-from logger import *
+from logger import log_info
 
 
 class UHSMBuilder:
@@ -45,10 +45,10 @@ class UHSMBuilder:
             
         elif selected == "quantum_head":
             # Особый случай: Квантовая голова как основная
-            n_qubits = args.get("n_qubits", 4)
-            adapter = nn.Sequential(nn.Linear(in_dim, n_qubits), nn.Tanh())
+            q_in_dim = args.get("in_dim", in_dim)
+            adapter = nn.Sequential(nn.Linear(in_dim, q_in_dim), nn.Tanh())
             q_layer = QuantumReUploadingLayer(**args)
-            return nn.Sequential(adapter, q_layer, nn.Linear(n_qubits, 1))
+            return nn.Sequential(adapter, q_layer, nn.Linear(q_in_dim, 1))
 
         raise ValueError(f"Unknown component type: {selected}")
 
@@ -95,7 +95,7 @@ class UHSMBuilder:
             _, q_args = cls._get_cfg(q_cfg["encoder"])
             q_encoder = QuantumReUploadingLayer(**q_args)
             
-            q_head = cls.build_component(q_encoder.n_qubits, q_cfg["head"])
+            q_head = cls.build_component(q_encoder.in_dim, q_cfg["head"])
 
         # 4. Mixer
         mix_cfg = m_cfg["final_mixer"]
@@ -119,5 +119,6 @@ class UHSMBuilder:
             quantum_head=q_head,
             final_mixer=final_mixer
         )
+        log_info("Model built", stage="MODEL")
         
         return model

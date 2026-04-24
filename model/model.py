@@ -74,13 +74,13 @@ class UniversalHybridSlotModel(nn.Module):
         # If adapter not provided, create linear layer based on encoder output dimension
         if self.to_quantum_adapter is None:
             in_dim = getattr(self.graph_encoder, 'out_dim', 128)  # fallback dimension
-            self.to_quantum_adapter = nn.Linear(in_dim, self.quantum_encoder.n_qubits)
+            self.to_quantum_adapter = nn.Linear(in_dim, self.quantum_encoder.in_dim)
 
         # If quantum head not provided - standard Tanh-regressor
         if self.quantum_head is None:
             self.quantum_head = nn.Sequential(
                 nn.Tanh(), 
-                nn.Linear(self.quantum_encoder.n_qubits, 1)
+                nn.Linear(self.quantum_encoder.in_dim, 1)
             )
 
         # Setup mixer (Perturbation Theory)

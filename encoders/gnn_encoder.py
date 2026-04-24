@@ -6,7 +6,7 @@ from torch import Tensor
 from torch_geometric.nn import global_max_pool, global_mean_pool, GATConv, GATv2Conv, TransformerConv, SAGPooling, TopKPooling
 from typing import Any, Dict, Optional
 from utils import Utils
-from logger import logger
+from logger import log_info
 
 
 class FlexGNNBlock(nn.Module):
@@ -91,7 +91,7 @@ class FlexGNNBlock(nn.Module):
                     self.convs.append(conv_class(curr_dim, h_dim, heads=heads, concat=True, **actual_conv_args))
                     curr_dim = h_dim * heads
         else:
-            logger.info("[GNN] EGNN special case selected; no standard GNN conv layers are built.")
+            log_info("EGNN special case selected; no standard GNN conv layers are built.", stage="GNN")
 
         if hier_pool_type == 'sag':
             self.hier_pool = SAGPooling(out_channels, **hier_pool_args)

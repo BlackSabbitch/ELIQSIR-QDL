@@ -7,7 +7,7 @@ from rdkit import Chem
 from Bio.PDB import PDBParser
 from scipy.spatial.distance import cdist
 from ._base_parser import BaseParser
-from logger import logger
+from logger import log_info, log_warn
 
 
 class InteractionGraphParser(BaseParser):
@@ -21,7 +21,7 @@ class InteractionGraphParser(BaseParser):
         self.dist_threshold = dist_threshold
         self.ca_only = ca_only
         self.pdb_parser = PDBParser(QUIET=True)
-        logger.info(f"[InteractionGraphParser] Initialized dist_threshold={dist_threshold}, ca_only={ca_only}")
+        log_info(f"Initialized dist_threshold={dist_threshold}, ca_only={ca_only}", stage="InteractionGraphParser")
 
     def parse_file(self, lig_path: str, pock_path: Optional[str] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
@@ -32,7 +32,7 @@ class InteractionGraphParser(BaseParser):
         try:
             return self._build_complex_graph(lig_path, pock_path, is_file=True)
         except Exception as e:
-            logger.warning(f"[InteractionGraphParser] parse_file failure: {e}")
+            log_warn(f"parse_file failure: {e}", stage="InteractionGraphParser")
             return None, str(e)
 
     def parse_stream(self, lig_bytes: bytes, pock_bytes: Optional[bytes] = None) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -44,7 +44,7 @@ class InteractionGraphParser(BaseParser):
         try:
             return self._build_complex_graph(lig_bytes, pock_bytes, is_file=False)
         except Exception as e:
-            logger.warning(f"[InteractionGraphParser] parse_stream failure: {e}")
+            log_warn(f"parse_stream failure: {e}", stage="InteractionGraphParser")
             return None, str(e)
 
     def _build_complex_graph(self, lig_data: Any, pock_data: Any, is_file: bool = True) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:

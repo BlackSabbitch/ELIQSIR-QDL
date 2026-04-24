@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from matplotlib import pyplot as plt
 from typing import Tuple, List, Optional
-from logger import logger
+from logger import log_info
 
 
 class Evaluator:
@@ -101,13 +101,9 @@ class Evaluator:
         preds, targets = [], []
         with torch.no_grad():
             for batch in loader:
-                *inputs, target = batch
-                inputs = [inp.to(self.device) if hasattr(inp, 'to') else {k: v.to(self.device) for k, v in inp.items()} for inp in inputs]
-                # inputs = [
-                #     x.to(self.device) if hasattr(x, "to") else x
-                #     for x in inputs
-                #     ]
-                y_hat = self.model(tuple(inputs))
+                batch = [inp.to(self.device) if hasattr(inp, 'to') else {k: v.to(self.device) for k, v in inp.items()} for inp in batch]
+                y_hat = self.model(tuple(batch))
+                target = batch[-1]
                 preds.extend(y_hat.cpu().view(-1).tolist())
                 targets.extend(target.tolist())
         
@@ -195,6 +191,6 @@ class Evaluator:
         plt.tight_layout()
         if save:
             plt.savefig(f'{exp_dir}/model_performance_report.png')
-            logger.info(f"[PLOT SAVE] Performance report saved to {exp_dir}/model_performance_report.png")
+            log_info(f"Performance report saved to {exp_dir}/model_performance_report.png", stage="EVALUATOR")
         if show:
             plt.show()

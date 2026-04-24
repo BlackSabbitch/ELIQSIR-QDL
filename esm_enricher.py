@@ -4,7 +4,7 @@ import torch
 import esm
 import numpy as np
 from typing import Optional
-from logger import logger
+from logger import log_info
 
 
 class ESMEnricher:
@@ -35,7 +35,7 @@ class ESMEnricher:
             model_name: Name of pre-trained ESM model to load.
             device: Device for computation ('cuda' or 'cpu').
         """
-        logger.info(f"[ESM] Loading ESM model {model_name}...")
+        log_info(f"Loading ESM model {model_name}...", stage="ESM")
         self.device = torch.device(device if torch.cuda.is_available() else "cpu")
         self.model, self.alphabet = esm.pretrained.load_model_and_alphabet(model_name)
         self.model.eval().to(self.device)

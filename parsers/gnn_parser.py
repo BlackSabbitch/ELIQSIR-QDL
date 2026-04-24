@@ -4,7 +4,7 @@ from rdkit import Chem
 from Bio.PDB import PDBParser
 from scipy.spatial.distance import cdist
 from ._base_parser import BaseParser
-from logger import logger
+from logger import log_info, log_warn
 
 
 class GNNParser(BaseParser):
@@ -17,7 +17,7 @@ class GNNParser(BaseParser):
         self.is_ligand = is_ligand
         self.dist_threshold = dist_threshold
         self.ca_only = ca_only
-        logger.info(f"[GNNParser] Initialized is_ligand={is_ligand}, dist_threshold={dist_threshold}, ca_only={ca_only}")
+        log_info(f"Initialized is_ligand={is_ligand}, dist_threshold={dist_threshold}, ca_only={ca_only}", stage="GNNParser")
 
     def parse_file(self, path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         """
@@ -37,7 +37,7 @@ class GNNParser(BaseParser):
                 return self._process_ligand(mol)
             return self._process_protein(path)
         except Exception as e:
-            logger.warning(f"[GNNParser] parse_file failed: {e}")
+            log_warn(f"parse_file failed: {e}", stage="GNNParser")
             return None, str(e)
 
     def _process_protein(self, path: str) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
@@ -60,7 +60,7 @@ class GNNParser(BaseParser):
                     coords.append([pos.x, pos.y, pos.z])
                     atomic_nums.append([atom.GetAtomicNum()])
         except Exception as e:
-            logger.info(f"[GNNParser] RDKit protein parse failed, falling back to Biopython: {e}")
+            log_info(f"RDKit protein parse failed, falling back to Biopython: {e}", stage="GNNParser")
             coords, atomic_nums = [], []
 
         if not coords:
@@ -81,7 +81,7 @@ class GNNParser(BaseParser):
                                 atomic_nums.append([a_num])
                     break
             except Exception as e:
-                logger.warning(f"[GNNParser] Biopython fallback failed: {e}")
+                log_warn(f"Biopython fallback failed: {e}", stage="GNNParser")
                 return None, f"Biopython fallback failed: {e}"
 
         if not coords:
@@ -119,5 +119,5 @@ class GNNParser(BaseParser):
                 edges.extend([[i, j], [j, i]])
             return {'x': xs, 'pos': pos, 'edge_index': edges}, None
         except Exception as e:
-            logger.warning(f"[GNNParser] ligand processing failed: {e}")
+            log_warn(f"ligand processing failed: {e}", stage="GNNParser")
             return None, str(e)

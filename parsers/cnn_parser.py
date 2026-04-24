@@ -4,7 +4,7 @@ from typing import Any, Optional, Tuple
 from rdkit import Chem, RDLogger
 from Bio.PDB import PDBParser, PPBuilder
 from ._base_parser import BaseParser
-from logger import logger
+from logger import log_debug, log_info, log_warn, log_error
 
 RDLogger.DisableLog('rdApp.*')
 
@@ -25,7 +25,7 @@ class CNNParser(BaseParser):
         """
         self.is_ligand = is_ligand
         self.valid_aa = set("ACDEFGHIKLMNPQRSTVWYX")
-        logger.info(f"[CNNParser] Initialized is_ligand={is_ligand}")
+        log_info(f"Initialized is_ligand={is_ligand}", stage="CNNParser")
 
     def parse_file(self, path: str) -> Tuple[Optional[Any], Optional[str]]:
         """
@@ -45,7 +45,7 @@ class CNNParser(BaseParser):
                 return self._process_ligand(mol)
             return self._process_protein(path)
         except Exception as e:
-            logger.warning(f"[CNNParser] parse_file failed: {e}")
+            log_warn(f"Parse_file failed: {e}", stage="CNNParser")
             return None, str(e)
 
     def _process_ligand(self, mol: Chem.Mol) -> Tuple[Optional[str], Optional[str]]:
@@ -64,7 +64,7 @@ class CNNParser(BaseParser):
                 pass
             return Chem.MolToSmiles(mol, isomericSmiles=True), None
         except Exception as e:
-            logger.warning(f"[CNNParser] ligand processing failed: {e}")
+            log_warn(f"Ligand processing failed: {e}", stage="CNNParser")
             return None, str(e)
 
     def _process_protein(self, path: str) -> Tuple[Optional[str], Optional[str]]:
@@ -90,5 +90,5 @@ class CNNParser(BaseParser):
                 return seq, None
             return None, "empty_sequence_in_both_parsers"
         except Exception as e:
-            logger.warning(f"[CNNParser] protein fallback failed: {e}")
+            log_warn(f"Protein fallback failed: {e}", stage="CNNParser")
             return None, f"biopython_fallback_error: {e}"

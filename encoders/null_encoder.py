@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Any
-from logger import logger
+from logger import log_info
 
 
 class NullEncoder(nn.Module):
@@ -30,7 +30,7 @@ class NullEncoder(nn.Module):
         """
         super().__init__()
         self.out_dim = out_dim
-        logger.info(f"[NullEncoder] Initialized with out_dim={out_dim}")
+        log_info(f"Initialized with out_dim={out_dim}", stage="NullEncoder")
 
     def forward(self, data: Any) -> Tensor:
         """
