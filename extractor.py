@@ -7,6 +7,7 @@ import tarfile
 import pandas as pd
 from tqdm import tqdm
 from multiprocessing import Pool
+from hashlib import md5
 from collections import Counter
 from typing import List, Optional, Dict, Any, Tuple
 from logger import log_info, log_warn
@@ -48,7 +49,8 @@ class PDBBindOrchestrator:
             dest_path: Directory where data will be extracted.
         """
         self.parsers = parsers
-        self.mode = config_dict['model']['graph_encoder']['selected']
+        self.graph_encoder = config_dict['model']['graph_encoder']['selected']
+        self.graph_encoder_mode = config_dict['model']['graph_encoder']['available'][self.graph_encoder]['protein_ligand_pocket_encoders'] 
         self.archive_path = archive_path
         self.dest_path = dest_path
         self.index_map = {
@@ -266,6 +268,23 @@ class PDBBindOrchestrator:
         Example:
             >>> df = orchestrator.build_dataset("refined", n_jobs=4, fmt="parquet")
         """
+        parsers_str_id = ""
+        for parser in self.parsers:
+            if parser is None:
+                parsers_str_id += "N"
+                continue
+            parsers_str_id += "_".join([f"{k}{v}" for k, v in sorted(vars(parser).items())])
+        parsers_str_id = md5(parsers_str_id.encode()).hexdigest()
+
+        name = file_name if file_name else f"pdbbds_{subset[:3]}_{self.graph_encoder}{self.graph_encoder_mode}_{parsers_str_id}"
+        self.full_path = os.path.join(save_dir, f"{name}.{fmt}")
+
+        if os.path.exists(self.full_path):
+            log_info(f"Existing dataset found: {self.full_path}. Loading from cache...", stage="CACHE")
+            if fmt == "parquet": return pd.read_parquet(self.full_path)
+            if fmt in ["pickle", "pkl"]: return pd.read_pickle(self.full_path)
+            if fmt == "csv": return pd.read_csv(self.full_path)
+
         targets = self.get_complex_ids(subset)
         
         ids_on_disk = [pid for pid in targets.keys() if 
@@ -277,11 +296,8 @@ class PDBBindOrchestrator:
         existing_cols = [col for col in ideal_order if col in df.columns]
         remaining_cols = [col for col in df.columns if col not in existing_cols]
         df = df[existing_cols + remaining_cols]
-
-        name = file_name if file_name else f"pdbbind_{subset}_{self.mode}"
-        self.full_path = os.path.join(save_dir, f"{name}.{fmt}")
+        
         actual_comp = compression if fmt == "parquet" else (None if compression == "snappy" else compression)
-
         os.makedirs(save_dir, exist_ok=True)
         self._save_metadata(subset, save_dir, name, fmt, actual_comp, len(df))
         self._save_dataset(df, fmt, actual_comp)
@@ -308,28 +324,38 @@ class PDBBindOrchestrator:
 
     def _save_metadata(self, subset: str, save_dir: str, name: str, fmt: str, actual_comp: Optional[str], n_complexes: int) -> None:
         """
-        Save dataset metadata to JSON file.
-
-        Args:
-            subset: Dataset subset name.
-            save_dir: Save directory.
-            name: Dataset name.
-            fmt: File format.
-            actual_comp: Compression type.
-            n_complexes: Number of complexes in dataset.
+        Save extended dataset metadata to JSON file for full reproducibility.
         """
-        # 2. Collect orchestrator and parsers metadata
+        # Собираем детальную информацию о каждом парсере
+        parsers_info = []
+        for parser in self.parsers:
+            if parser is None:
+                parsers_info.append("None")
+            else:
+                # Сохраняем имя класса и все его настройки (radius, ca_only и т.д.)
+                parsers_info.append({
+                    "class": parser.__class__.__name__,
+                    "params": vars(parser)
+                })
+
         metadata = {
+            "dataset_name": name,
             "full_path": self.full_path,
             "timestamp": datetime.now().strftime("%Y%m%d_%H%M%S"),
             "subset": subset,
+            "n_complexes": n_complexes,
+            "graph_encoder": self.graph_encoder,
+            "graph_encoder_mode": self.graph_encoder_mode,
             "format": fmt,
             "compression": str(actual_comp),
-            "n_complexes": n_complexes,
-            "parsers": self.mode
+            # Вкладываем детальное описание парсеров
+            "parsers_config": parsers_info,
+            "orchestrator_params": {
+                "dest_path": self.dest_path,
+                "file_suffix_map": self.file_suffix_map
+            }
         }
         
-        # 3. Save JSON alongside dataset
         self.full_meta_path = os.path.join(save_dir, f"{name}_meta.json")
         with open(self.full_meta_path, 'w', encoding='utf-8') as f:
             json.dump(metadata, f, indent=4, ensure_ascii=False)

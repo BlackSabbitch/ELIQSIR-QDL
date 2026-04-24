@@ -24,7 +24,6 @@ class CNNParser(BaseParser):
             is_ligand: Whether to parse ligand files instead of protein PDB files.
         """
         self.is_ligand = is_ligand
-        self.valid_aa = set("ACDEFGHIKLMNPQRSTVWYX")
         log_info(f"Initialized is_ligand={is_ligand}", stage="CNNParser")
 
     def parse_file(self, path: str) -> Tuple[Optional[Any], Optional[str]]:
@@ -71,11 +70,12 @@ class CNNParser(BaseParser):
         """
         Extract an amino acid sequence from a protein PDB file.
         """
+        valid_aa = set("ACDEFGHIKLMNPQRSTVWYX")
         try:
             mol = Chem.MolFromPDBFile(path, sanitize=False, proximityBonding=False)
             if mol:
                 seq = Chem.MolToSequence(mol)
-                res_seq = "".join([res for res in seq if res in self.valid_aa])
+                res_seq = "".join([res for res in seq if res in valid_aa])
                 if res_seq:
                     return res_seq, None
         except Exception:

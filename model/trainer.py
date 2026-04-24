@@ -7,7 +7,7 @@ from model.model import UniversalHybridSlotModel
 from encoders.original_quantum_encoder import QuantumReUploadingLayer
 from utils import Utils
 from loss_functions.loss_functions import get_loss_function
-from logger import log_info, log_warn
+from logger import *
 import json
 import os
 from typing import Tuple
@@ -185,6 +185,7 @@ class HybridTrainer:
             train_loader: DataLoader for training data.
             val_loader: DataLoader for validation data.
         """
+        plot_every_n_epochs = self.train_cfg.get('plot_every_n_epochs', 10)
         best_val_r = -1.0
         best_epoch = 0
         self.history = {
@@ -192,11 +193,14 @@ class HybridTrainer:
             'val_ci': [], 'best_y_true': None, 'best_y_pred': None
             }
         
-        for epoch in range(self.train_cfg['epochs']):
+        total_number_of_epochs = self.train_cfg['epochs']
+        for epoch in range(total_number_of_epochs):
+            epoch_id = epoch + 1
+            log_info(f"Epoch {epoch_id}/{total_number_of_epochs}", stage="TRAINER")
             train_loss = self.train_epoch(train_loader)
             val_loss = self.validate(val_loader)
             
-            log_info(f"Epoch {epoch+1}/{self.train_cfg['epochs']}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}", stage="PROGRESS")
+            log_info(f"Epoch {epoch_id}/{total_number_of_epochs}, Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}", stage="TRAINER")
 
             rmse, r_val, ci_val, preds, targets = self.evaluator.evaluate(val_loader)
             self.history['train_loss'].append(train_loss)
@@ -211,18 +215,22 @@ class HybridTrainer:
                 json.dump(self.history, f, indent=4)
 
             if not save_only_best_epoch:
-                torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch}.pt")
+                torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch_id}.pt")
 
-            log_info(f"Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="PROGRESS")
+            log_info(f"Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="TRAINER")
             log_info("-" * 60, stage="PROGRESS")
 
             if r_val > best_val_r:
                 best_val_r = r_val
-                best_epoch = (epoch + 1)
+                best_epoch = epoch_id
                 torch.save(self.model.state_dict(), f"{exp_dir}/best_model.pt")
                 log_info(f"New best R: {best_val_r:.4f} (Saved to best_model.pt)", stage="TRAINER")
 
             self.step_schedulers(val_loss)
+
+            # if it is the last epoch, the runner anyway will draw the results
+            if (epoch_id % plot_every_n_epochs == 0) and (epoch_id != total_number_of_epochs):
+                console_plots(self.history, side_by_side=True, stage="TRAINER")
 
         return best_epoch, best_val_r
 

@@ -2,11 +2,14 @@
 
 import json
 import os
+import numpy as np
 import argparse
 import torch
 from datetime import datetime
 from torch_geometric.loader import DataLoader
+from typing import Tuple
 
+from logger import *
 from extractor import PDBBindOrchestrator
 from tokenizer import UniversalPDBBindDataset
 from evaluator import Evaluator
@@ -14,8 +17,9 @@ from splitter import PDBBindSplitter
 from model.model_builder import UHSMBuilder
 from parsers.cnn_parser import CNNParser
 from parsers.gnn_parser import GNNParser
-from logger import log_info, setup_file_logging, get_ascii_plot, log_side_by_side, log_residuals_hist
 from model.trainer import HybridTrainer
+
+DATASETS_DIR = "datasets"
 
 
 class ExperimentRunner:
@@ -24,35 +28,55 @@ class ExperimentRunner:
     training, and evaluation based on a configuration file.
     """
 
-    def __init__(self, config_path: str, extract: bool = False):
+    def __init__(self, config_path: str, extract: bool = False,
+                 train_dataset_path: None | str = None,
+                 test_dataset_path: None |str = None,
+                 val_dataset_path: None | str = None):
         with open(config_path or 'config.json', 'r') as f:
             self.config = json.load(f)
         
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         log_info(f"Starting experiment: {self.config['experiment_name']}", stage="EXPERIMENT")
         self.extract = extract
+        self.train_dataset_path = train_dataset_path
+        self.test_dataset_path = test_dataset_path
+        self.val_dataset_path = val_dataset_path
+        input_datasets = [self.train_dataset_path, self.test_dataset_path, self.val_dataset_path]
+        assert all(input_datasets) or not any(input_datasets)
 
-    def prepare(self):
+    def prepare_folders(self):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         exp_name = f"{self.config['experiment_name']}_{timestamp}"        
         log_info(f"Experiment signature: {exp_name}", stage="EXPERIMENT")
         self.exp_run_dir = f"runs/{exp_name}"
-        self.exp_data_dir = f"datasets/{exp_name}" # Индивидуальная папка для датасетов!
-        log_info(f"Datasets folder: {self.exp_data_dir}", stage="EXPERIMENT")
+        self.exp_run_datasets_dir = f"{self.exp_run_dir}/datasets"
+        log_info(f"Base Datasets folder: {DATASETS_DIR}", stage="EXPERIMENT")
         log_info(f"Run results folder: {self.exp_run_dir}", stage="EXPERIMENT")
+        log_info(f"Experiment datasets path: {self.exp_run_dir}/datasets", stage="EXPERIMENT")
 
         os.makedirs(self.exp_run_dir, exist_ok=True)
-        os.makedirs(self.exp_data_dir, exist_ok=True)
-        os.makedirs("data/base_datasets", exist_ok=True) # Глобальный кэш
+        os.makedirs(DATASETS_DIR, exist_ok=True)
+        os.makedirs(self.exp_run_datasets_dir, exist_ok=True)
 
         log_path = os.path.join(self.exp_run_dir, "log.txt")
         setup_file_logging(log_path)
         log_info(f"Log file: {log_path}", stage="EXPERIMENT")
 
-    def run(self):
-        trio_str = self.config['model']['graph_encoder']['available']['trio']['protein_ligand_pocket_encoders']
+    def prepare_datasets(self):
+        if self.train_dataset_path is not None:
+            log_info(f"Run with custom train/test/val datasets", stage="EXPERIMENT")
+
+            self.config["dataset"].update({
+                "train_path": self.train_dataset_path,
+                "test_path": self.test_dataset_path,
+                "val_path": self.val_dataset_path,
+                })
+            return
+
+        mode = self.config['model']['graph_encoder']['selected']
+        mode_str = self.config['model']['graph_encoder']['available'][mode]['protein_ligand_pocket_encoders']
         parsers = []
-        for i, char in enumerate(trio_str):
+        for i, char in enumerate(mode_str):
             is_lig = (i == 1)
             if char == 'C': parsers.append(CNNParser(is_ligand=is_lig))
             elif char == 'G': parsers.append(GNNParser(is_ligand=is_lig))
@@ -61,8 +85,8 @@ class ExperimentRunner:
 
         orchestrator = PDBBindOrchestrator(parsers, self.config)
         if self.extract: orchestrator.extract_subset("refined")
-        df_refined = orchestrator.build_dataset(subset="refined", fmt="pickle", save_dir=self.exp_data_dir)
-        df_core = orchestrator.build_dataset(subset="core", fmt="pickle", save_dir=self.exp_data_dir)
+        df_refined = orchestrator.build_dataset(subset="refined", fmt="pickle", save_dir=DATASETS_DIR)
+        df_core = orchestrator.build_dataset(subset="core", fmt="pickle", save_dir=DATASETS_DIR)
 
         clean_refined = df_refined[~df_refined['pdb_id'].isin(df_core['pdb_id'])]
 
@@ -70,9 +94,9 @@ class ExperimentRunner:
 
         test_df = df_core
 
-        train_path = f"{self.exp_data_dir}/train.pickle"
-        val_path   = f"{self.exp_data_dir}/val.pickle"
-        test_path  = f"{self.exp_data_dir}/test_core.pickle"
+        train_path = f"{self.exp_run_datasets_dir}/train.pickle"
+        val_path   = f"{self.exp_run_datasets_dir}/val.pickle"
+        test_path  = f"{self.exp_run_datasets_dir}/test_core.pickle"
 
         train_df.to_pickle(train_path)
         test_df.to_pickle(test_path)
@@ -80,10 +104,11 @@ class ExperimentRunner:
 
         self.config["dataset"].update({
             "train_path": train_path,
-            "val_path": val_path,
             "test_path": test_path,
-        })
+            "val_path": val_path,
+            })
 
+    def run(self):
         train_ds = UniversalPDBBindDataset(self.config["dataset"]["train_path"], self.config)
         test_ds = UniversalPDBBindDataset(self.config["dataset"]["test_path"], self.config)
         val_ds   = UniversalPDBBindDataset(self.config["dataset"]["val_path"], self.config)
@@ -106,55 +131,15 @@ class ExperimentRunner:
 
         log_info(f"Launch on: {self.device}", stage="EXPERIMENT")
 
-        trainer = HybridTrainer(model, evaluator, self.config, self.device)
-        best_epoch, _ = trainer.train(train_loader, val_loader, self.exp_run_dir, self.config['training']['save_only_best_epoch'])
-        trainer.test(test_loader, self.exp_run_dir, best_epoch)
+        self.trainer = HybridTrainer(model, evaluator, self.config, self.device)
+        best_epoch, _ = self.trainer.train(train_loader, val_loader, self.exp_run_dir, self.config['training']['save_only_best_epoch'])
+        self.trainer.test(test_loader, self.exp_run_dir, best_epoch)
 
         log_info("Generating ASCII performance summary...", stage="SUMMARY")
-
-        loss_chart = get_ascii_plot(trainer.history["train_loss"], title="Learning Curve (Loss)")
-        log_info(f"Loss Curve:\n" + "\n".join(loss_chart), stage="SUMMARY")
-
-        rmse_chart = get_ascii_plot(trainer.history["val_rmse"], title="Validation RMSE")
-        log_info(f"RMSE Curve:\n" + "\n".join(rmse_chart), stage="SUMMARY")
-
-        r_chart = get_ascii_plot(trainer.history["val_pearson"], title="Correlation (Pearson R)")
-        log_info(f"Pearson (R) Curve:\n" + "\n".join(r_chart), stage="SUMMARY")
-
-        ci_chart = get_ascii_plot(trainer.history["val_ci"], title="Ranking Accuracy (CI)")
-        log_info(f"Concordancy Index Curve:\n" + "\n".join(ci_chart), stage="SUMMARY")
-
-        y_true = trainer.history['best_y_true']
-        y_pred = trainer.history['best_y_pred']
-
-        act_vs_pred_chart = get_ascii_plot([y_true, y_pred], title="Predicted = f(Actual)")
-        log_info(f"Concordancy Index Curve:\n" + "\n".join(act_vs_pred_chart), stage="SUMMARY")
-
-        log_info("Generating Multi-column ASCII Dashboard...", stage="SUMMARY")
-
-        dashboard_loss_rmse = log_side_by_side(
-            trainer.history["train_loss"], "Learning Curve (Loss)",
-            trainer.history["val_rmse"], "Validation RMSE"
-        )
-        log_info(dashboard_loss_rmse, stage="SUMMARY")
-
-        dashboard_r_ci = log_side_by_side(
-            trainer.history["val_pearson"], "Correlation (Pearson R)",
-            trainer.history["val_ci"], "Ranking Accuracy (CI)"
-        )
-        log_info(dashboard_r_ci, stage="SUMMARY")
-
-        y_true = trainer.history['best_y_true']
-        y_pred = trainer.history['best_y_pred']
-
-        dashboar_act_vs_pred_residuals = log_side_by_side(
-            [y_true, y_pred], "Predicted = f(Actual)",
-            trainer.history["val_rmse"], "Validation RMSE",
-            is_scatter=True
-        )
-        log_info(dashboar_act_vs_pred_residuals, stage="SUMMARY")
-
+        console_plots(self.trainer.history, side_by_side=False, stage="SUMMARY")
+        console_plots(self.trainer.history, side_by_side=True, stage="SUMMARY")
         log_info("Experiment completed successfully.", stage="EXPERIMENT")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run PDBBind Experiment")
@@ -165,10 +150,21 @@ if __name__ == "__main__":
     # Флаг экстракции (если указан в bash — станет True)
     parser.add_argument('--extract', action='store_true', 
                         help='Extract subset before building dataset')
+    
+    parser.add_argument('--train_path', type=str, default=None)
+    parser.add_argument('--test_path', type=str, default=None)
+    parser.add_argument('--val_path', type=str, default=None)
 
     args = parser.parse_args()
-    runner = ExperimentRunner(config_path=args.config, extract=args.extract)
-    runner.prepare()
+    runner = ExperimentRunner(
+        config_path=args.config,
+        extract=args.extract,
+        train_dataset_path=args.train_path,
+        test_dataset_path=args.test_path,
+        val_dataset_path=args.val_path
+    )
+    runner.prepare_folders()
+    runner.prepare_datasets()
 
     try:
         runner.run()
