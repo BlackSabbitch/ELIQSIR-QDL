@@ -1,0 +1,243 @@
+{
+    "experiment_name": "GGG_TEST",
+    "metadata": {
+        "version": "1.0.0",
+        "objective": "Deep study of quantum-classical hybrid interactions in protein-ligand docking"
+    },
+    "enrichment": {
+        "selected": "none",
+        "available": {
+            "esm_2": {},
+            "sspro": {}
+        }
+    },
+    "splitter": {
+        "selected": "random",
+        "available": {
+            "random": {
+                "val_frac": 0.15,
+                "seed": 42
+            },
+            "scaffold": {
+                "val_frac": 0.15,
+                "seed": 42
+            },
+            "scaffold_balanced": {
+                "val_frac": 0.15,
+                "seed": 42
+            },
+            "cold_protein": {
+                "val_frac": 0.15,
+                "seed": 42
+            }
+        }
+    },
+    "dataset": {
+        "max_prot_len": 1000,
+        "max_lig_atoms": 150,
+        "max_pocket_atoms": 63,
+        "batch_size": 8,
+        "num_workers": 4,
+        "pin_memory": true,
+        "save_train_test_val_datasets": false,
+        "prot_vocab": "?ACDEFGHIKLMNPQRSTVWY",
+        "lig_vocab": "?ABCDEFGHIKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-=[]()#%@+./\\:,;^$"
+    },
+    "model": {
+        "graph_encoder": {
+            "selected": "trio",
+            "available": {
+                "trio": {
+                    "protein_ligand_pocket_encoders": "CCC",
+                    "hidden_dim": 128,
+                    "gnn_params": {
+                        "conv_type": "gat_v2",
+                        "num_layers": 3,
+                        "heads": 4,
+                        "dropout": 0.2,
+                        "in_channels": 3,
+                        "protein_in_channels": 1,
+                        "ligand_in_channels": 3,
+                        "pocket_in_channels": 1,
+                        "embed_dim": 128,
+                        "out_channels": 128,
+                        "edge_dim": 32,
+                        "add_self_loops": true,
+                        "dist_threshold": 5.0,
+                        "use_batch_norm": true,
+                        "ca_only": false,
+                        "node_processor": {
+                            "selected": "none",
+                            "available": {
+                                "sag": { "in_channels": 128, "ratio": 0.5 },
+                                "topk": { "in_channels": 128, "ratio": 0.3 },
+                                "none": {}
+                            }
+                        },
+                        "aggregation": {
+                            "selected": "mean",
+                            "available": {
+                                "mean": {},
+                                "max": {},
+                                "attention": {
+                                    "gate_nn_layers": [128, 64],
+                                    "nn_layers": null,
+                                    "dropout": 0.1
+                                }
+                            }
+                        }
+                    },
+                    "cnn_params": {
+                        "vocab_size": 0,
+                        "embed_dim": 128,
+                        "mode": "parallel",
+                        "filters": 32,
+                        "kernels": [4, 8, 12],
+                        "use_batch_norm": true,
+                        "activation": "ReLU",
+                        "pool_type": "AdaptiveMaxPool1d"
+                    }
+                },
+                "duo": {
+                    "protein_ligand_pocket_encoders": "NE",
+                    "gnn_params": {
+                        "conv_type": "gat_v2",
+                        "num_layers": 3,
+                        "heads": 4,
+                        "dropout": 0.2,
+                        "edge_dim": 32,
+                        "add_self_loops": true,
+                        "dist_threshold": 5.0,
+                        "ca_only": false
+                    },
+                    "cnn_params": {
+                        "vocab_size": 0,
+                        "embed_dim": 128,
+                        "filters": 32,
+                        "kernels": [4, 8, 12],
+                        "use_batch_norm": true
+                    },
+                    "egnn_params": {
+                        "in_channels": 128,
+                        "hidden_channels": 128,
+                        "num_layers": 4,
+                        "ca_only": false,
+                        "dist_threshold": 5.0,
+                        "m_dim": 64
+                    }
+                }
+            }
+        },
+        "classic_head": {
+            "selected": "VQE",
+            "available": {
+                "MLP": {
+                    "in_dim": 128,
+                    "hidden_dims": [64, 32],
+                    "out_dim": 1,
+                    "activation": "ReLU",
+                    "dropout": 0.1
+                },
+                "VQE": {
+                    "in_dim": 9,
+                    "n_layers": 8
+                },
+                "Linear": {
+                    "in_dim": 2
+                }
+            }
+        },
+        "quantum_branch": {
+            "enabled": false,
+            "adapter": {
+                "selected": "linear_bottleneck",
+                "available": {
+                    "linear_bottleneck": {
+                        "in_dim": 128,
+                        "hidden_layers": [256, 64],
+                        "out_dim": 9,
+                        "activation": "Tanh"
+                    }
+                }
+            },
+            "encoder": {
+                "selected": "re_uploading",
+                "available": {
+                    "re_uploading": {
+                        "in_dim": 9,
+                        "n_layers": 8,
+                        "rotation": "X",
+                        "initial_rotation": "Y",
+                        "entanglement": "strongly_entangling",
+                        "input_scale": 0.01,
+                        "start_scale": 0.5235987755982988,
+                        "end_scale": 3.141592653589793
+                    }
+                }
+            },
+            "head": {
+                "selected": "linear_tanh",
+                "available": {
+                    "linear_tanh": { "in_dim": 9, "hidden_dim": 16, "out_dim": 1, "activation": "Tanh" }
+                }
+            }
+        },
+        "final_mixer": {
+            "selected": "linear_perturbation",
+            "available": {
+                "linear_perturbation": {
+                    "in_features": 2,
+                    "init_weight": [1.0, 1.0],
+                    "init_bias": 0.0
+                },
+                "additive": {}
+            }
+        }
+    },
+    "training": {
+        "epochs": 5,
+        "plot_every_n_epochs": 2,
+        "save_only_best_epoch": true,
+        "early_stopping": {
+            "enabled": false,
+            "patience": 15,
+            "monitor": "val_pearson",
+            "mode": "max"
+        },
+        "loss_fn": {
+            "selected": "HuberLoss",
+            "available": {
+                "MSELoss": {},
+                "MAELoss": {},
+                "HuberLoss": {"delta": 1.0},
+                "QuantileLoss": {"quantile": 0.5},
+                "RankingMSELoss": {"alpha": 2.0 }
+            },
+            "regularization": {
+                "enabled": true,
+                "type": "slope",
+                "weight": 0.05,
+                "target_slope": 1.0,
+                "one_sided": true
+            }
+        },
+        "optimizers": {
+            "classic": {
+                "type": "AdamW",
+                "params": { "lr": 0.001, "weight_decay": 0.01, "amsgrad": true },
+                "scheduler": {
+                    "type": "ReduceLROnPlateau",
+                    "params": { "mode": "min", "factor": 0.5, "patience": 5 }
+                }
+            },
+            "quantum": {
+            "type": "AdamW",
+                "params": { "lr": 0.001, "weight_decay": 0.01 },
+                "scheduler": {
+                    "type": "CosineAnnealingLR",
+                    "params": { "T_max": 100, "eta_min": 1e-6 }
+                }
+            }
+        }
+    }
+}
