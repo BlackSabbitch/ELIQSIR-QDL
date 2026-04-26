@@ -1,5 +1,5 @@
 {
-    "experiment_name": "GGG_TEST",
+    "experiment_name": "CCC_TEST",
     "metadata": {
         "version": "1.0.0",
         "objective": "Deep study of quantum-classical hybrid interactions in protein-ligand docking"
@@ -129,7 +129,7 @@
             }
         },
         "classic_head": {
-            "selected": "VQE",
+            "selected": "MLP",
             "available": {
                 "MLP": {
                     "in_dim": 128,
@@ -199,10 +199,15 @@
         "plot_every_n_epochs": 2,
         "save_only_best_epoch": true,
         "early_stopping": {
-            "enabled": false,
-            "patience": 15,
-            "monitor": "val_pearson",
-            "mode": "max"
+            "enabled": true,
+            "patience": 4,
+            "primary_monitor": "val_pearson",
+            "monitors": {
+                "val_pearson": "max",
+                "val_rmse": "ignore",
+                "train_loss": "ignore",
+                "val_ci": "max"
+            }
         },
         "loss_fn": {
             "selected": "HuberLoss",
@@ -214,7 +219,7 @@
                 "RankingMSELoss": {"alpha": 2.0 }
             },
             "regularization": {
-                "enabled": true,
+                "enabled": false,
                 "type": "slope",
                 "weight": 0.05,
                 "target_slope": 1.0,
@@ -224,7 +229,7 @@
         "optimizers": {
             "classic": {
                 "type": "AdamW",
-                "params": { "lr": 0.001, "weight_decay": 0.01, "amsgrad": true },
+                "params": { "lr": 1e-3, "weight_decay": 0.01, "amsgrad": true },
                 "scheduler": {
                     "type": "ReduceLROnPlateau",
                     "params": { "mode": "min", "factor": 0.5, "patience": 5 }
@@ -232,7 +237,7 @@
             },
             "quantum": {
             "type": "AdamW",
-                "params": { "lr": 0.001, "weight_decay": 0.01 },
+                "params": { "lr": 1e-3, "weight_decay": 0.01 },
                 "scheduler": {
                     "type": "CosineAnnealingLR",
                     "params": { "T_max": 100, "eta_min": 1e-6 }

@@ -78,6 +78,33 @@ class HybridTrainer:
         # 3. Loss function
         self.criterion = get_loss_function(config['training'])
 
+        es_cfg = config['training']['early_stopping']
+        self.es_enabled = es_cfg['enabled']
+        self.monitors = es_cfg['monitors']
+        self.primary_metric = es_cfg['primary_monitor']
+        self.primary_metric_mode = es_cfg['monitors'][self.primary_metric]
+        if self.primary_metric_mode == 'ignore':
+            log_error(f"Primary metric {self.primary_metric_mode} can't be ignored", stage="METRICS")
+        log_info(f"Primary metric: {self.primary_metric} with mode {self.primary_metric_mode}", stage="METRICS")
+        self.best_scores = {self.primary_metric: float('-inf') if self.primary_metric_mode == 'max' else float('inf')}
+        if self.es_enabled:
+            self.es_patience = es_cfg['patience']
+            self.early_stop = False
+
+            for k, v in self.monitors.items():
+                if v == 'max':
+                    self.best_scores[k] = float('-inf')
+                elif v == 'min':
+                    self.best_scores[k] = float('inf')
+                elif v == 'ignore':
+                    pass
+                else:
+                    log_error(f"Unknown mode {v} on metrics {k} monitoring", stage="METRICS")
+            log_info(f"Early stopping enabled with patience {self.es_patience}", stage="METRICS")
+            log_info(f"Monitors: {self.monitors}", stage="METRICS")
+        else:
+            log_info("Early stopping disabled", stage="TRAINER")
+
     def _build_scheduler(self, optimizer, sched_cfg):
         if not sched_cfg:
             return None
@@ -245,12 +272,14 @@ class HybridTrainer:
             val_loader: DataLoader for validation data.
         """
         plot_every_n_epochs = self.train_cfg.get('plot_every_n_epochs', 10)
-        best_val_r = -1.0
+        # best_val_r = -1.0
         best_epoch = 0
         self.history = {
             'train_loss': [], 'val_rmse': [], 'val_pearson': [], 
             'val_ci': [], 'best_y_true': None, 'best_y_pred': None
             }
+        if self.es_enabled:
+            self.es_counter = 0
         
         total_number_of_epochs = self.train_cfg['epochs']
         log_info("-" * 75, stage="TRAINER")
@@ -263,7 +292,7 @@ class HybridTrainer:
             
             log_info(f"[EPOCH {epoch_id}/{total_number_of_epochs}] Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}", stage="TRAINER")
 
-            rmse, r_val, ci_val, preds, targets = self.evaluator.evaluate(val_loader, progress=progress)
+            _, r_val, ci_val, preds, targets = self.evaluator.evaluate(val_loader, progress=progress)
 
             if self.config['dataset']['stats'] is not None:
                 stats = self.config['dataset']['stats']
@@ -280,13 +309,56 @@ class HybridTrainer:
             self.history['val_rmse'].append(float(rmse_denorm))
             self.history['val_pearson'].append(float(r_val))
             self.history['val_ci'].append(float(ci_val))
-            if r_val >= max(self.history['val_pearson']):
+            log_info(f"[EPOCH {epoch_id}/{total_number_of_epochs}] Valid: RMSE {rmse_denorm:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="TRAINER")
+
+            current_metrics = {
+                "val_pearson": r_val,
+                "val_rmse": rmse_denorm,
+                "train_loss": train_loss,
+                "val_ci": ci_val
+            }
+
+            improved_any = False
+            improved_primary = False
+
+            for metric, mode in self.monitors.items():
+                if mode == 'ignore': continue
+                val = current_metrics.get(metric)
+                if val is None: continue
+                if (mode == 'max' and val > self.best_scores[metric]) or \
+                    (mode == 'min' and val < self.best_scores[metric]):
+
+                    self.best_scores[metric] = val
+                    improved_any = True
+                    log_info(f"{"Primary m" if self.primary_metric == metric else "M"}etric"
+                    f" {metric} improved: {val:.4f}", stage="TRAINER")
+
+                    if metric == self.primary_metric:
+                        improved_primary = True
+
+            if improved_primary:
+                best_epoch = epoch_id
+                torch.save(self.model.state_dict(), f"{exp_dir}/best_model.pt")
                 self.history['best_y_true'] = targets_denorm.tolist()
                 self.history['best_y_pred'] = preds_denorm.tolist()
+                log_info(f"New best for primary metric {self.primary_metric}:"
+                f" {self.best_scores[self.primary_metric]:.4f} (Saved to best_model.pt)",
+                stage="TRAINER")
+            if self.es_enabled:
+                if improved_any:
+                    self.es_counter = 0
+                else:
+                    self.es_counter += 1
+                    log_info(f"EarlyStopping counter: {self.es_counter}/{self.es_patience}",
+                                stage="TRAINER")
+                    if self.es_counter >= self.es_patience:
+                        log_info(f"[EPOCH {epoch_id}/{total_number_of_epochs}]"
+                        f" Early stopping triggered", stage="TRAINER")
+                        self.early_stop = True
+
             for k in ['train_loss', 'val_rmse', 'val_pearson', 'val_ci']:
                 data = self.history[k]
                 log_debug(f"Key: {k}, Length: {len(data)}, Types: {[type(x) for x in data]}", stage="DEBUG_PLOT")
-
 
             with open(f"{exp_dir}/history.json", 'w') as f:
                 json.dump(self.history, f, indent=4)
@@ -294,15 +366,10 @@ class HybridTrainer:
             if not save_only_best_epoch:
                 torch.save(self.model.state_dict(), f"{exp_dir}/model_epoch_{epoch_id}.pt")
 
-            log_info(f"[EPOCH {epoch_id}/{total_number_of_epochs}] Valid: RMSE {rmse:.4f} | R {r_val:.4f} | CI {ci_val:.4f}", stage="TRAINER")
-
-            if r_val > best_val_r:
-                best_val_r = r_val
-                best_epoch = epoch_id
-                torch.save(self.model.state_dict(), f"{exp_dir}/best_model.pt")
-                log_info(f"[EPOCH {epoch_id}/{total_number_of_epochs}] New best R = {best_val_r:.4f} (Saved to best_model.pt)", stage="TRAINER")
-
             log_info("-" * 75, stage="TRAINER")
+            if self.early_stop:
+                break
+
             self.step_schedulers(val_loss)
 
             # if it is the last epoch, the runner anyway will draw the results
@@ -310,7 +377,7 @@ class HybridTrainer:
                 console_plots(self.history, side_by_side=True, stage="TRAINER")
 
         log_info("-" * 75, stage="TRAINER")
-        return best_epoch, best_val_r
+        return best_epoch, self.best_scores[self.primary_metric]
 
     def test(self, test_loader, exp_dir, best_epoch, show_plots=False, save_plots=True):
         if hasattr(self, 'history'):

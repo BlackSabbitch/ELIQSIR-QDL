@@ -114,7 +114,7 @@ class QuantumReUploadingLayer(nn.Module):
         scale = self.scale_start + (self.scale_end - self.scale_start) * progress
         if torch.rand(1) < 0.02:
             log_debug(f"mean: {x.mean().item():.3f}, std: {x.std().item():.3f}, max: {x.max().item():.3f}, scale: {scale:.3f}, progress: {progress:.3f}", stage="QUANTUM INPUTS")
-        # x = x * self.input_scale
+        x = x * self.input_scale
         x = torch.tanh(x) * scale
         return self.qlayer(x)
 
