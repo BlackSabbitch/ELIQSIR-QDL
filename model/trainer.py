@@ -3,10 +3,7 @@
 import torch
 # import torch.nn as nn
 from tqdm import tqdm
-import pennylane as qml
 from model.model import UniversalHybridSlotModel
-from encoders.original_quantum_encoder import QuantumReUploadingLayer
-from model.model_builder import VQEHead
 from utils import Utils
 from loss_functions.loss_functions import get_loss_function
 from logger import *

@@ -3,23 +3,10 @@
 import torch
 import torch.nn as nn
 from encoders.trio_encoder import build_trio_encoder
-from encoders.original_quantum_encoder import QuantumReUploadingLayer
+from encoders.QE_encoder import QuantumReUploadingLayer, VQEHead
 from typing import Any, Optional, Tuple, Union
 from model.model import UniversalHybridSlotModel
 from logger import *
-
-
-class VQEHead(nn.Module):
-    def __init__(self, adapter: nn.Module, q_layer: nn.Module, final_layer: nn.Module) -> None:
-        super().__init__()
-        self.adapter = adapter
-        self.q_layer = q_layer
-        self.final_layer = final_layer
-
-    def forward(self, x: torch.Tensor, progress: float = 0.0) -> torch.Tensor:
-        x = self.adapter(x)
-        x = self.q_layer(x, progress=progress)
-        return self.final_layer(x)
 
 
 class UHSMBuilder:

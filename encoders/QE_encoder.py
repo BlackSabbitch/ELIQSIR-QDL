@@ -114,6 +114,19 @@ class QuantumReUploadingLayer(nn.Module):
         scale = self.scale_start + (self.scale_end - self.scale_start) * progress
         if torch.rand(1) < 0.02:
             log_debug(f"mean: {x.mean().item():.3f}, std: {x.std().item():.3f}, max: {x.max().item():.3f}, scale: {scale:.3f}, progress: {progress:.3f}", stage="QUANTUM INPUTS")
-        x = x * self.input_scale
+        # x = x * self.input_scale
         x = torch.tanh(x) * scale
         return self.qlayer(x)
+
+
+class VQEHead(nn.Module):
+    def __init__(self, adapter: nn.Module, q_layer: nn.Module, final_layer: nn.Module) -> None:
+        super().__init__()
+        self.adapter = adapter
+        self.q_layer = q_layer
+        self.final_layer = final_layer
+
+    def forward(self, x: torch.Tensor, progress: float = 0.0) -> torch.Tensor:
+        x = self.adapter(x)
+        x = self.q_layer(x, progress=progress)
+        return self.final_layer(x)
