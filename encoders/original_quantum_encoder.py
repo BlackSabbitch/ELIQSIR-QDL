@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import pennylane as qml
 from torch import Tensor
-from typing import Any, Dict
-from logger import log_info, log_warn
+from typing import Any, Dict, Optional
+from logger import *
 from utils import Utils
 
 
@@ -31,12 +31,21 @@ class QuantumReUploadingLayer(nn.Module):
             in_dim: Number of quantum wires/qubits.
             n_layers: Number of variational layers in the circuit.
             **kwargs: Additional PennyLane-specific configuration options.
+                Supported extra kwargs:
+                    input_scale: float multiplier applied before tanh.
+                    start_scale: initial angle scale in radians.
+                    end_scale: final angle scale in radians.
         """
         super().__init__()
         self.in_dim = in_dim
         self.n_layers = n_layers
 
+        self.input_scale = kwargs.pop("input_scale", 0.01)
+        self.scale_start = kwargs.pop("start_scale", torch.pi / 6)
+        self.scale_end = kwargs.pop("end_scale", torch.pi)
+
         self.rotation = kwargs.pop("rotation", "X")
+        self.initial_rotation = kwargs.pop("initial_rotation", "Y")
         entanglement = kwargs.pop("entanglement", "full")
         self.entanglement = "full" if entanglement == "strongly_entangling" else entanglement
 
@@ -51,7 +60,7 @@ class QuantumReUploadingLayer(nn.Module):
             )
 
         log_info(
-            f"Creating with {in_dim} qubits, {n_layers} layers, rotation={self.rotation}, entanglement={self.entanglement}",
+            f"Creating with {in_dim} qubits, {n_layers} layers, initial_rotation={self.initial_rotation}, rotation={self.rotation}, entanglement={self.entanglement}",
             stage="QuantumReUploadingLayer"
         )
         dev = qml.device("default.qubit", wires=in_dim)
@@ -61,15 +70,13 @@ class QuantumReUploadingLayer(nn.Module):
             qml.AngleEmbedding(
                 inputs,
                 wires=range(in_dim),
-                rotation=self.rotation,
+                rotation=self.initial_rotation,
                 **self.angle_embedding_kwargs
             )
             for i in range(self.n_layers):
                 qml.StronglyEntanglingLayers(
                     entangling_weights[i],
                     wires=range(in_dim),
-                    rotation=self.rotation,
-                    entanglement=self.entanglement,
                     **self.strongly_entangling_kwargs
                 )
                 qml.AngleEmbedding(
@@ -81,8 +88,6 @@ class QuantumReUploadingLayer(nn.Module):
             qml.StronglyEntanglingLayers(
                 entangling_weights[-1],
                 wires=range(in_dim),
-                rotation=self.rotation,
-                entanglement=self.entanglement,
                 **self.strongly_entangling_kwargs
             )
             return [qml.expval(qml.PauliZ(wires=i)) for i in range(in_dim)]
@@ -93,15 +98,22 @@ class QuantumReUploadingLayer(nn.Module):
         }
         self.qlayer = qml.qnn.TorchLayer(circuit, weight_shapes)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, progress: float = 0.0) -> Tensor:
         """
         Forward pass through the quantum layer.
 
         Args:
             x: Input tensor of shape [batch_size, in_dim].
+            progress: Schedule progress in [0, 1] used to scale the embedded angles.
 
         Returns:
             Tensor of expectation values with shape [batch_size, in_dim].
         """
-        x = torch.tanh(x) * torch.pi
+        progress = float(progress)
+        progress = min(max(progress, 0.0), 1.0)
+        scale = self.scale_start + (self.scale_end - self.scale_start) * progress
+        if torch.rand(1) < 0.02:
+            log_debug(f"mean: {x.mean().item():.3f}, std: {x.std().item():.3f}, max: {x.max().item():.3f}, scale: {scale:.3f}, progress: {progress:.3f}", stage="QUANTUM INPUTS")
+        x = x * self.input_scale
+        x = torch.tanh(x) * scale
         return self.qlayer(x)

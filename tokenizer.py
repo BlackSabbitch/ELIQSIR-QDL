@@ -33,7 +33,7 @@ class UniversalPDBBindDataset(Dataset):
         ...     pass
     """
 
-    def __init__(self, filepath: str, config_dict: Dict[str, Any]) -> None:
+    def __init__(self, df: pd.DataFrame, config_dict: Dict[str, Any]) -> None:
         """
         Initialize the dataset.
 
@@ -44,16 +44,7 @@ class UniversalPDBBindDataset(Dataset):
         Raises:
             ValueError: If file format is not supported.
         """
-        # 1. Auto-detect file format
-        if filepath.endswith('.csv'):
-            self.df = pd.read_csv(filepath)
-        elif filepath.endswith(('.pkl', '.pickle')):
-            self.df = pd.read_pickle(filepath)
-        elif filepath.endswith('.parquet'):
-            self.df = pd.read_parquet(filepath)
-        else:
-            raise ValueError("Unsupported file format. Use .csv, .pkl, or .parquet")
-        
+        self.df = df
         ds_cfg = config_dict['dataset']
         self.prot_vocab = {c: i for i, c in enumerate(ds_cfg['prot_vocab'])}
         self.lig_vocab = {c: i for i, c in enumerate(ds_cfg['lig_vocab'])}

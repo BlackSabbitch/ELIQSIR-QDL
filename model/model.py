@@ -123,7 +123,21 @@ class UniversalHybridSlotModel(nn.Module):
         # Handle tuples from PyG layers (TopK, SAGPool)
         return out[0] if isinstance(out, tuple) else out
 
-    def forward(self, data: Tuple) -> torch.Tensor:
+    def _call_module_with_optional_progress(self, module: Optional[nn.Module], x: torch.Tensor, progress: float) -> torch.Tensor:
+        """
+        Call module with progress if supported, otherwise call normally.
+
+        This allows classic heads like VQE wrappers to receive schedule progress
+        without breaking standard MLP/Linear modules.
+        """
+        if module is None:
+            return x
+        try:
+            return module(x, progress=progress)
+        except TypeError:
+            return module(x)
+
+    def forward(self, data: Tuple, progress: float = 0.0) -> torch.Tensor:
         """
         Forward pass through the hybrid model.
 
@@ -149,7 +163,7 @@ class UniversalHybridSlotModel(nn.Module):
 
         # === CLASSICAL BRANCH ===
         # 3A. Solver -> Base affinity
-        base_affinity = self.classic_head(features)  # [Batch, 1]
+        base_affinity = self._call_module_with_optional_progress(self.classic_head, features, progress)  # [Batch, 1]
 
         if self.quantum_encoder is None:
             return base_affinity
@@ -159,7 +173,7 @@ class UniversalHybridSlotModel(nn.Module):
         # 3B. Adapter (angles for qubits)
         q_context = self.to_quantum_adapter(z_quantum)
         # 4B. Quantum core (Data Re-uploading)
-        q_features = self.quantum_encoder(q_context)
+        q_features = self.quantum_encoder(q_context, progress=progress)
         # 5B. Quantum correction
         q_affinity_shift = self.quantum_head(q_features)  # [Batch, 1]
 

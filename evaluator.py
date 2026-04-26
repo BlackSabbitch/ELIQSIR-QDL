@@ -81,7 +81,7 @@ class Evaluator:
         
         return (concordant + 0.5 * ties) / valid_pairs
 
-    def evaluate(self, loader) -> Tuple[float, float, float, np.ndarray, np.ndarray]:
+    def evaluate(self, loader, progress: float = 1.0) -> Tuple[float, float, float, np.ndarray, np.ndarray]:
         """
         Evaluate model performance on a dataset.
 
@@ -102,7 +102,7 @@ class Evaluator:
         with torch.no_grad():
             for batch in loader:
                 batch = [inp.to(self.device) if hasattr(inp, 'to') else {k: v.to(self.device) for k, v in inp.items()} for inp in batch]
-                y_hat = self.model(tuple(batch))
+                y_hat = self.model(tuple(batch), progress=progress)
                 target = batch[-1]
                 preds.extend(y_hat.cpu().view(-1).tolist())
                 targets.extend(target.tolist())

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Any, Dict
-from logger import log_info, log_warn
+from logger import *
 
 LOSS_ALIASES: Dict[str, str] = {
     "MAELoss": "L1Loss"
@@ -89,7 +89,7 @@ class SlopeRegularizationLoss(nn.Module):
         self.weight = weight
         self.target_slope = target_slope
         self.one_sided = one_sided
-        log_info(
+        log_debug(
             f"Initialized weight={weight}, target_slope={target_slope}, one_sided={one_sided}",
             stage="SlopeRegularizationLoss"
         )
@@ -142,15 +142,15 @@ def get_loss_function(config_training: Dict[str, Any]) -> nn.Module:
         return loss_class(**loss_parameters)
 
     if hasattr(nn, loss_name):
-        log_info(f"Using built-in PyTorch loss {loss_name}", stage="LossFunctions")
+        log_info(f"Using built-in PyTorch loss {loss_name}", stage="LossFunction")
         loss_module = getattr(nn, loss_name)(**loss_parameters)
     else:
         raise ValueError(f"Loss function '{loss_name}' not found in PyTorch or custom registry.")
 
     reg_cfg = config_training['loss_fn'].get('regularization', {})
-    if reg_cfg.get('enabled', False):
+    regularisation_enabled = reg_cfg.get('enabled', False)
+    if regularisation_enabled:
         if reg_cfg.get('type', 'slope') == 'slope':
-            log_info("Applying slope regularization wrapper", stage="LossFunctions")
             loss_module = SlopeRegularizationLoss(
                 loss_module,
                 weight=reg_cfg.get('weight', 0.05),
@@ -159,5 +159,6 @@ def get_loss_function(config_training: Dict[str, Any]) -> nn.Module:
             )
         else:
             log_warn(f"Unknown regularization type: {reg_cfg.get('type')} - skipping", stage="LossFunctions")
+    log_info(f"Slope regularization: {regularisation_enabled}", stage="LossFunction")
 
     return loss_module

@@ -55,7 +55,7 @@ def setup_file_logging(log_path):
     fh.setLevel(logging.INFO)
     
     # Применяем тот же форматтер
-    formatter = StageFormatter('[%(levelname)s][%(stage)s] - %(message)s')
+    formatter = StageFormatter('[%(levelname)s][%(stage)s] %(message)s')
     fh.setFormatter(formatter)
     
     # Добавляем к существующему логгеру
@@ -64,7 +64,9 @@ def setup_file_logging(log_path):
 def get_ascii_plot(data, title,
                    width=DEFAULT_WIDTH_SINGLE,
                    height=DEFAULT_HEIGHT_SINGLE,
-                   lines=False, force_diagonal=False):
+                   lines=False,
+                   force_diagonal=False,
+                   stage="SUMMARY"):
     if data is None: return ["No data"]
     
     buf = io.StringIO()
@@ -99,7 +101,7 @@ def get_ascii_plot(data, title,
     # 2. Логика для обычных графиков (Loss, RMSE и Histogram)
     else:
         # Если это гистограмма, пришедшая как [bins, counts]
-        if isinstance(data, list) and len(data) == 2:
+        if isinstance(data, list) and len(data) == 2 and isinstance(data[0], (list, np.ndarray)):
              uplot_args.update({"xs": data[0], "ys": data[1]})
         else:
              uplot_args.update({"ys": data})
@@ -109,7 +111,8 @@ def get_ascii_plot(data, title,
             uplot(**uplot_args) # Распаковываем только нужные аргументы
         return buf.getvalue().splitlines()
     except Exception as e:
-        return [f"Plot Error: {e}"]
+        log_error(f"{title} Plot Error: {e}", stage=stage)
+        return [f"{title} Plot Error: {e}"]
 
 def get_residuals_hist_data(y_true, y_pred, bins=20):
     """Готовит данные для гистограммы"""
@@ -119,16 +122,16 @@ def get_residuals_hist_data(y_true, y_pred, bins=20):
     return bin_centers, counts
 
 def log_side_by_side(data_left, title_left, data_right, title_right, 
-                     is_scatter=False, is_hist=False):
+                     is_scatter=False, is_hist=False, stage="SUMMARY"):
     # Если слева scatter, включаем диагональ
     left_lines = get_ascii_plot(data_left, title_left,
                                 width=DEFAULT_WIDTH_SIDE, height=DEFAULT_HEIGHT_SIDE,
-                                force_diagonal=is_scatter)
+                                force_diagonal=is_scatter, stage=stage)
     
     # Если справа гистограмма, рисуем ее линиями
     right_lines = get_ascii_plot(data_right, title_right,
                                  width=DEFAULT_WIDTH_SIDE, height=DEFAULT_HEIGHT_SIDE,
-                                 lines=is_hist)
+                                 lines=is_hist, stage=stage)
 
     max_len = max(len(left_lines), len(right_lines))
     left_lines += [""] * (max_len - len(left_lines))
@@ -170,7 +173,8 @@ def console_plots(trainer_history, side_by_side=True, stage="SUMMARY"):
             [y_true, y_pred], "Actual vs Predicted",   # Left: Scatter
             [hist_x, hist_y], "Residuals Distribution", # Right: Histogram (как XY график)
             is_scatter=True,
-            is_hist=True
+            is_hist=True,
+            stage=stage
         )
         
         log_info("Final Performance Analytics:" + dashboard_final, stage=stage)

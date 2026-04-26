@@ -2,6 +2,8 @@
 
 import math
 import inspect
+import torch
+import numpy as np
 from typing import Dict, Any, Callable
 from logger import log_info
 from datetime import datetime
@@ -72,3 +74,25 @@ class Utils:
         """
         sig = inspect.signature(func)
         return {k: v for k, v in kwargs.items() if k in sig.parameters}
+
+    @staticmethod
+    def normalize(values, stats: dict):
+        """Приводит значения к Z-score: (x - mean) / std"""
+        return (values - stats['mean']) / stats['std']
+
+    @staticmethod
+    def denormalize(values, stats: dict):
+        """Возвращает значения к реальному масштабу: x * std + mean"""
+        if isinstance(values, list):
+            import numpy as np
+            values = np.array(values)
+        return values * stats['std'] + stats['mean']
+
+    @staticmethod
+    def calculate_rmse(y_true, y_pred):
+        """Считает RMSE без sklearn"""
+        if torch.is_tensor(y_true):
+            return torch.sqrt(torch.mean((y_true - y_pred)**2)).item()
+        else:
+            # Для numpy или списков
+            return np.sqrt(np.mean((np.array(y_true) - np.array(y_pred))**2))
